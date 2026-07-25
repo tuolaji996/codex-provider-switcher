@@ -20,7 +20,11 @@ public static class CredentialVault
         var bytes = Encoding.UTF8.GetBytes(secret);
         if (bytes.Length > 5120)
         {
-            throw new ArgumentOutOfRangeException(nameof(secret), "Credential is too large.");
+            throw new ArgumentOutOfRangeException(
+                nameof(secret),
+                Localizer.Text(
+                    "凭据内容过大。",
+                    "The credential is too large."));
         }
 
         var blob = Marshal.AllocCoTaskMem(bytes.Length);

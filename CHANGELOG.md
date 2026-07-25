@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented here.
 
+## [1.2.0] - 2026-07-25
+
+### Added
+
+- A `CHN / ENG` language selector in the main window.
+- Complete Chinese and English text for labels, status messages, dialogs,
+  provider checks, host diagnostics, and validation errors.
+- Persistent language selection in the existing local `settings.json`.
+
+### Changed
+
+- The header now wraps cleanly at the supported minimum window width.
+- Third-party privacy and key status text now use the full content width, with
+  provider actions placed on a separate responsive row.
+
+### Verified
+
+- Existing provider, history, SSE, tool-calling, image, host, and credential
+  self-tests continue to pass.
+- Chinese and English layouts were checked at the default size and at the
+  `680 x 520` minimum size.
+- Language selection was verified across application restarts.
+
 ## [1.1.0] - 2026-07-24
 
 ### Added

@@ -27,6 +27,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <Border Width="52"
                         Height="52"
@@ -46,14 +47,42 @@
                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
                     <TextBlock Text="Codex Provider Switcher"
                                FontSize="25"
-                               FontWeight="SemiBold" />
-                    <TextBlock Text="官方登录与第三方线路，共用同一份聊天历史"
+                               FontWeight="SemiBold"
+                               Margin="0,0,8,0"
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="TaglineText"
+                               Text="官方登录与第三方线路，共用同一份聊天历史"
                                Foreground="{StaticResource MutedTextBrush}"
                                FontSize="13"
-                               Margin="0,4,0,0" />
+                               Margin="0,4,8,0"
+                               TextWrapping="Wrap" />
                 </StackPanel>
+                <Border Grid.Column="2"
+                        CornerRadius="8"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="1"
+                        Background="#101720"
+                        Padding="2"
+                        Margin="0,0,12,0"
+                        VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal">
+                        <ToggleButton x:Name="ChineseLanguageButton"
+                                      Content="CHN"
+                                      Style="{StaticResource LanguageButton}"
+                                      Margin="0,0,2,0"
+                                      IsEnabled="False"
+                                      Checked="ChineseLanguageButton_Checked"
+                                      Unchecked="LanguageButton_Unchecked" />
+                        <ToggleButton x:Name="EnglishLanguageButton"
+                                      Content="ENG"
+                                      Style="{StaticResource LanguageButton}"
+                                      IsEnabled="False"
+                                      Checked="EnglishLanguageButton_Checked"
+                                      Unchecked="LanguageButton_Unchecked" />
+                    </StackPanel>
+                </Border>
                 <Border x:Name="ModeBadge"
-                        Grid.Column="2"
+                        Grid.Column="3"
                         CornerRadius="16"
                         Padding="13,7"
                         Background="#26313E"
@@ -78,7 +107,10 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel>
-                        <TextBlock Text="当前状态" FontSize="15" FontWeight="SemiBold" />
+                        <TextBlock x:Name="CurrentStatusTitleText"
+                                   Text="当前状态"
+                                   FontSize="15"
+                                   FontWeight="SemiBold" />
                         <TextBlock x:Name="CurrentRouteText"
                                    Margin="0,7,0,0"
                                    Foreground="{StaticResource MutedTextBrush}"
@@ -87,7 +119,8 @@
                                    Margin="0,7,0,0"
                                    Foreground="{StaticResource MutedTextBrush}"
                                    TextWrapping="Wrap" />
-                        <TextBlock Text="固定历史分区：OpenAI（切换时永远不改）"
+                        <TextBlock x:Name="StableHistoryText"
+                                   Text="固定历史分区：OpenAI（切换时永远不改）"
                                    Margin="0,7,0,0"
                                    Foreground="{StaticResource AccentBrush}" />
                     </StackPanel>
@@ -122,14 +155,19 @@
                     </Grid.ColumnDefinitions>
 
                     <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,16">
-                        <TextBlock Text="第三方线路" FontSize="17" FontWeight="SemiBold" />
-                        <TextBlock Text="密钥保存在 Windows 凭据管理器；不会写进 config.toml、源码或日志。"
+                        <TextBlock x:Name="ThirdPartyTitleText"
+                                   Text="第三方线路"
+                                   FontSize="17"
+                                   FontWeight="SemiBold" />
+                        <TextBlock x:Name="KeyStorageDescriptionText"
+                                   Text="密钥保存在 Windows 凭据管理器；不会写进 config.toml、源码或日志。"
                                    Foreground="{StaticResource MutedTextBrush}"
                                    Margin="0,5,0,0"
                                    TextWrapping="Wrap" />
                     </StackPanel>
 
-                    <TextBlock Grid.Row="1"
+                    <TextBlock x:Name="BaseUrlLabelText"
+                               Grid.Row="1"
                                Grid.Column="0"
                                Text="Base URL"
                                VerticalAlignment="Center"
@@ -137,10 +175,12 @@
                     <TextBox Grid.Row="1"
                              Grid.Column="1"
                              x:Name="BaseUrlTextBox"
+                             AutomationProperties.LabeledBy="{Binding ElementName=BaseUrlLabelText}"
                              TextChanged="ProviderSettingsTextBox_TextChanged"
                              Margin="0,0,0,11" />
 
-                    <TextBlock Grid.Row="2"
+                    <TextBlock x:Name="ModelLabelText"
+                               Grid.Row="2"
                                Grid.Column="0"
                                Text="模型"
                                VerticalAlignment="Center"
@@ -148,10 +188,12 @@
                     <TextBox Grid.Row="2"
                              Grid.Column="1"
                              x:Name="ModelTextBox"
+                             AutomationProperties.LabeledBy="{Binding ElementName=ModelLabelText}"
                              TextChanged="ProviderSettingsTextBox_TextChanged"
                              Margin="0,0,0,11" />
 
-                    <TextBlock Grid.Row="3"
+                    <TextBlock x:Name="ApiKeyLabelText"
+                               Grid.Row="3"
                                Grid.Column="0"
                                Text="新 API Key"
                                VerticalAlignment="Center"
@@ -162,7 +204,8 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <PasswordBox x:Name="ApiKeyPasswordBox" />
+                        <PasswordBox x:Name="ApiKeyPasswordBox"
+                                     AutomationProperties.LabeledBy="{Binding ElementName=ApiKeyLabelText}" />
                         <Button Grid.Column="1"
                                 x:Name="SaveKeyButton"
                                 Content="保存密钥"
@@ -177,34 +220,30 @@
                                 Click="DeleteKeyButton_Click" />
                     </Grid>
 
-                    <Grid Grid.Row="4" Grid.ColumnSpan="2" Margin="0,16,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Margin="0,16,0,0">
                         <StackPanel VerticalAlignment="Center">
                             <TextBlock x:Name="KeyStatusText"
                                        Foreground="{StaticResource MutedTextBrush}" />
-                            <TextBlock Text="注意：第三方服务会接收你发送给 Codex 的提示词、代码片段和工具上下文。"
+                            <TextBlock x:Name="ThirdPartyPrivacyWarningText"
+                                       Text="注意：第三方服务会接收你发送给 Codex 的提示词、代码片段和工具上下文。"
                                        Foreground="#E9A23B"
                                        FontSize="12"
                                        Margin="0,4,16,0"
                                        TextWrapping="Wrap" />
                         </StackPanel>
-                        <Button Grid.Column="1"
-                                x:Name="TestConnectionButton"
-                                Content="测试 Responses 兼容性"
-                                Style="{StaticResource SecondaryButton}"
-                                Margin="12,0,0,0"
-                                Click="TestConnectionButton_Click" />
-                        <Button Grid.Column="2"
-                                x:Name="SwitchThirdPartyButton"
-                                Content="切换到第三方"
-                                Style="{StaticResource PrimaryButton}"
-                                Margin="10,0,0,0"
-                                Click="SwitchThirdPartyButton_Click" />
-                    </Grid>
+                        <WrapPanel HorizontalAlignment="Right" Margin="0,12,0,0">
+                            <Button x:Name="TestConnectionButton"
+                                    Content="测试 Responses 兼容性"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Margin="0,0,10,8"
+                                    Click="TestConnectionButton_Click" />
+                            <Button x:Name="SwitchThirdPartyButton"
+                                    Content="切换到第三方"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Margin="0,0,0,8"
+                                    Click="SwitchThirdPartyButton_Click" />
+                        </WrapPanel>
+                    </StackPanel>
                 </Grid>
             </Border>
 
@@ -216,8 +255,12 @@
                     Padding="20"
                     Margin="0,0,0,16">
                 <StackPanel>
-                    <TextBlock Text="能力诊断" FontSize="17" FontWeight="SemiBold" />
-                    <TextBlock Text="官方账号能力保留在本机；第三方模型仍需通过 Responses 工具协议与图片接口实测。"
+                    <TextBlock x:Name="CapabilityTitleText"
+                               Text="能力诊断"
+                               FontSize="17"
+                               FontWeight="SemiBold" />
+                    <TextBlock x:Name="CapabilityDescriptionText"
+                               Text="官方账号能力保留在本机；第三方模型仍需通过 Responses 工具协议与图片接口实测。"
                                Foreground="{StaticResource MutedTextBrush}"
                                Margin="0,5,0,0"
                                TextWrapping="Wrap" />
@@ -285,8 +328,12 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel>
-                        <TextBlock Text="官方 OpenAI Codex" FontSize="17" FontWeight="SemiBold" />
-                        <TextBlock Text="使用现有 ChatGPT 登录与订阅额度；官方登录凭据不会被删除或覆盖。"
+                        <TextBlock x:Name="OfficialTitleText"
+                                   Text="官方 OpenAI Codex"
+                                   FontSize="17"
+                                   FontWeight="SemiBold" />
+                        <TextBlock x:Name="OfficialDescriptionText"
+                                   Text="使用现有 ChatGPT 登录与订阅额度；官方登录凭据不会被删除或覆盖。"
                                    Foreground="{StaticResource MutedTextBrush}"
                                    Margin="0,6,20,0"
                                    TextWrapping="Wrap" />
@@ -317,9 +364,11 @@
                               Checked="RestartCheckBox_Changed"
                               Unchecked="RestartCheckBox_Changed" />
                     <StackPanel Grid.Column="1">
-                        <TextBlock Text="切换后自动重启 Codex"
+                        <TextBlock x:Name="RestartTitleText"
+                                   Text="切换后自动重启 Codex"
                                    FontWeight="SemiBold" />
-                        <TextBlock Text="重启会中断正在运行的 Codex 任务。配置写入前会自动生成备份。"
+                        <TextBlock x:Name="RestartDescriptionText"
+                                   Text="重启会中断正在运行的 Codex 任务。配置写入前会自动生成备份。"
                                    Foreground="{StaticResource MutedTextBrush}"
                                    Margin="0,3,0,0"
                                    TextWrapping="Wrap" />

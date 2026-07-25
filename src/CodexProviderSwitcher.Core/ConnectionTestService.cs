@@ -57,7 +57,10 @@ public sealed partial class ConnectionTestService
         {
             return new ConnectionTestResult(
                 false,
-                $"Responses 流报告失败：{stream.Error ?? "未提供错误详情。"}",
+                F(
+                    "Responses 流报告失败：{0}",
+                    "The Responses stream reported a failure: {0}",
+                    stream.Error ?? T("未提供错误详情。", "No error details were provided.")),
                 transport.StatusCode);
         }
 
@@ -65,13 +68,17 @@ public sealed partial class ConnectionTestService
         {
             return new ConnectionTestResult(
                 false,
-                "接口返回了 SSE，但没有完整的 response.completed 文本结果。",
+                T(
+                    "接口返回了 SSE，但没有完整的 response.completed 文本结果。",
+                    "The endpoint returned SSE but no complete response.completed text result."),
                 transport.StatusCode);
         }
 
         return new ConnectionTestResult(
             true,
-            "连接成功：认证、Responses API、SSE 完整事件与文本输出均可用。",
+            T(
+                "连接成功：认证、Responses API、SSE 完整事件与文本输出均可用。",
+                "Connection succeeded: authentication, the Responses API, complete SSE events, and text output are all available."),
             transport.StatusCode);
     }
 
@@ -124,7 +131,9 @@ public sealed partial class ConnectionTestService
         {
             return new ConnectionTestResult(
                 false,
-                DescribeTransportFailure(first, "工具调用请求"),
+                DescribeTransportFailure(
+                    first,
+                    T("工具调用请求", "Tool-call request")),
                 first.StatusCode);
         }
 
@@ -141,7 +150,9 @@ public sealed partial class ConnectionTestService
         {
             return new ConnectionTestResult(
                 false,
-                "第三方 Responses 可以返回文本，但没有产生完整的 function_call；插件工具不能确认可用。",
+                T(
+                    "第三方 Responses 可以返回文本，但没有产生完整的 function_call；插件工具不能确认可用。",
+                    "The third-party Responses endpoint returned text but did not produce a complete function_call; plugin tools cannot be confirmed."),
                 first.StatusCode);
         }
 
@@ -153,7 +164,9 @@ public sealed partial class ConnectionTestService
             {
                 return new ConnectionTestResult(
                     false,
-                    "function_call 参数结构不符合 Responses 工具协议。",
+                    T(
+                        "function_call 参数结构不符合 Responses 工具协议。",
+                        "The function_call arguments do not match the Responses tool protocol."),
                     first.StatusCode);
             }
         }
@@ -161,7 +174,9 @@ public sealed partial class ConnectionTestService
         {
             return new ConnectionTestResult(
                 false,
-                "function_call arguments 不是有效 JSON。",
+                T(
+                    "function_call arguments 不是有效 JSON。",
+                    "The function_call arguments are not valid JSON."),
                 first.StatusCode);
         }
 
@@ -191,7 +206,9 @@ public sealed partial class ConnectionTestService
         {
             return new ConnectionTestResult(
                 false,
-                "第一轮 response.output 无法完整回放；reasoning 工具上下文不完整。",
+                T(
+                    "第一轮 response.output 无法完整回放；reasoning 工具上下文不完整。",
+                    "The first response.output could not be replayed completely; the reasoning tool context is incomplete."),
                 first.StatusCode);
         }
 
@@ -225,7 +242,9 @@ public sealed partial class ConnectionTestService
         {
             return new ConnectionTestResult(
                 false,
-                DescribeTransportFailure(second, "工具结果回传请求"),
+                DescribeTransportFailure(
+                    second,
+                    T("工具结果回传请求", "Tool-result replay request")),
                 second.StatusCode);
         }
 
@@ -239,14 +258,19 @@ public sealed partial class ConnectionTestService
         {
             return new ConnectionTestResult(
                 false,
-                "模型产生了 function_call，但没有原样返回随机工具回执；" +
-                "工具结果可能在中转层丢失，插件仍不算端到端兼容。",
+                T(
+                    "模型产生了 function_call，但没有原样返回随机工具回执；" +
+                    "工具结果可能在中转层丢失，插件仍不算端到端兼容。",
+                    "The model produced a function_call but did not return the random tool receipt exactly; " +
+                    "the relay may have dropped the tool result, so plugin compatibility is not end-to-end."),
                 second.StatusCode);
         }
 
         return new ConnectionTestResult(
             true,
-            "插件协议通过：function_call 与工具结果回传均成功。",
+            T(
+                "插件协议通过：function_call 与工具结果回传均成功。",
+                "Plugin protocol passed: function_call and tool-result replay both succeeded."),
             second.StatusCode);
     }
 
@@ -372,14 +396,19 @@ public sealed partial class ConnectionTestService
         {
             return new ImageGenerationTestResult(
                 false,
-                "Images API 请求成功，但没有返回 data[0].b64_json 图片数据。",
+                T(
+                    "Images API 请求成功，但没有返回 data[0].b64_json 图片数据。",
+                    "The Images API request succeeded but returned no data[0].b64_json image data."),
                 StatusCode: response.StatusCode);
         }
 
         var path = SaveDiagnosticImage(bytes, "images-api");
         return new ImageGenerationTestResult(
             true,
-            $"Codex 当前 Images API 后端已实际生成图片：{path}",
+            F(
+                "Codex 当前 Images API 后端已实际生成图片：{0}",
+                "Codex's current Images API backend generated an image: {0}",
+                path),
             ImageGenerationPath.ImageApi,
             path,
             response.StatusCode);
@@ -447,7 +476,10 @@ public sealed partial class ConnectionTestService
                     statusCode,
                     mediaType,
                     null,
-                    $"返回格式是 {mediaType}，不是 text/event-stream。",
+                    F(
+                        "返回格式是 {0}，不是 text/event-stream。",
+                        "The response format is {0}, not text/event-stream.",
+                        mediaType),
                     null);
             }
 
@@ -486,7 +518,10 @@ public sealed partial class ConnectionTestService
                 string.Empty,
                 null,
                 null,
-                $"请求超时（{timeoutDuration.TotalSeconds:0} 秒）。");
+                F(
+                    "请求超时（{0:0} 秒）。",
+                    "The request timed out after {0:0} seconds.",
+                    timeoutDuration.TotalSeconds));
         }
         catch (HttpRequestException exception)
         {
@@ -496,7 +531,10 @@ public sealed partial class ConnectionTestService
                 string.Empty,
                 null,
                 null,
-                $"网络连接失败：{exception.Message}");
+                F(
+                    "网络连接失败：{0}",
+                    "Network connection failed: {0}",
+                    exception.Message));
         }
     }
 
@@ -559,7 +597,10 @@ public sealed partial class ConnectionTestService
                 null,
                 null,
                 null,
-                $"请求超时（{timeoutDuration.TotalSeconds:0} 秒）。");
+                F(
+                    "请求超时（{0:0} 秒）。",
+                    "The request timed out after {0:0} seconds.",
+                    timeoutDuration.TotalSeconds));
         }
         catch (HttpRequestException exception)
         {
@@ -568,7 +609,10 @@ public sealed partial class ConnectionTestService
                 null,
                 null,
                 null,
-                $"网络连接失败：{exception.Message}");
+                F(
+                    "网络连接失败：{0}",
+                    "Network connection failed: {0}",
+                    exception.Message));
         }
     }
 
@@ -597,11 +641,25 @@ public sealed partial class ConnectionTestService
 
         return result.StatusCode switch
         {
-            401 or 403 => "认证失败：请检查或更换第三方 API Key。",
-            404 => $"该服务没有所需接口：{label}。",
+            401 or 403 => T(
+                "认证失败：请检查或更换第三方 API Key。",
+                "Authentication failed. Check or replace the third-party API key."),
+            404 => F(
+                "该服务没有所需接口：{0}。",
+                "The service does not provide the required endpoint: {0}.",
+                label),
             _ when result.StatusCode is not null =>
-                $"{label} 返回 HTTP {result.StatusCode}。{result.ErrorSummary}",
-            _ => $"{label} 未通过。{result.ErrorSummary}"
+                F(
+                    "{0} 返回 HTTP {1}。{2}",
+                    "{0} returned HTTP {1}. {2}",
+                    label,
+                    result.StatusCode,
+                    result.ErrorSummary),
+            _ => F(
+                "{0} 未通过。{1}",
+                "{0} failed. {1}",
+                label,
+                result.ErrorSummary)
         };
     }
 
@@ -614,11 +672,25 @@ public sealed partial class ConnectionTestService
 
         return result.StatusCode switch
         {
-            401 or 403 => "认证失败：请检查或更换第三方 API Key。",
-            404 => $"{label} 接口不存在。",
+            401 or 403 => T(
+                "认证失败：请检查或更换第三方 API Key。",
+                "Authentication failed. Check or replace the third-party API key."),
+            404 => F(
+                "{0} 接口不存在。",
+                "The {0} endpoint does not exist.",
+                label),
             _ when result.StatusCode is not null =>
-                $"{label} 返回 HTTP {result.StatusCode}。{result.ErrorSummary}",
-            _ => $"{label} 未通过。{result.ErrorSummary}"
+                F(
+                    "{0} 返回 HTTP {1}。{2}",
+                    "{0} returned HTTP {1}. {2}",
+                    label,
+                    result.StatusCode,
+                    result.ErrorSummary),
+            _ => F(
+                "{0} 未通过。{1}",
+                "{0} failed. {1}",
+                label,
+                result.ErrorSummary)
         };
     }
 
@@ -647,7 +719,9 @@ public sealed partial class ConnectionTestService
         catch (JsonException)
         {
             accumulator.Failed = true;
-            accumulator.Error ??= "SSE data 不是有效 JSON。";
+            accumulator.Error ??= T(
+                "SSE data 不是有效 JSON。",
+                "SSE data is not valid JSON.");
         }
     }
 
@@ -831,11 +905,15 @@ public sealed partial class ConnectionTestService
     {
         if (bytes.Length < 1024)
         {
-            throw new InvalidDataException("图片数据过小，无法确认是有效生成结果。");
+            throw new InvalidDataException(T(
+                "图片数据过小，无法确认是有效生成结果。",
+                "The image data is too small to confirm a valid generated result."));
         }
 
         var extension = DetectImageExtension(bytes) ??
-            throw new InvalidDataException("返回的数据不是可识别的 PNG、JPEG 或 WebP 图片。");
+            throw new InvalidDataException(T(
+                "返回的数据不是可识别的 PNG、JPEG 或 WebP 图片。",
+                "The returned data is not a recognized PNG, JPEG, or WebP image."));
         ValidateDecodableImage(bytes);
         Directory.CreateDirectory(AppPaths.DiagnosticsRoot);
         var path = Path.Combine(
@@ -885,7 +963,9 @@ public sealed partial class ConnectionTestService
                 BitmapCacheOption.None);
             if (decoder.Frames.Count == 0)
             {
-                throw new InvalidDataException("图片没有可解码帧。");
+                throw new InvalidDataException(T(
+                    "图片没有可解码帧。",
+                    "The image has no decodable frames."));
             }
 
             var frame = decoder.Frames[0];
@@ -895,7 +975,9 @@ public sealed partial class ConnectionTestService
                 height is < 1 or > 8192 ||
                 (long)width * height > 64L * 1024 * 1024)
             {
-                throw new InvalidDataException("图片尺寸超出诊断工具的安全范围。");
+                throw new InvalidDataException(T(
+                    "图片尺寸超出诊断工具的安全范围。",
+                    "The image dimensions exceed the diagnostic tool's safety limits."));
             }
 
             var bitsPerPixel = Math.Max(frame.Format.BitsPerPixel, 1);
@@ -922,7 +1004,11 @@ public sealed partial class ConnectionTestService
             IOException or
             System.Runtime.InteropServices.COMException)
         {
-            throw new InvalidDataException("返回的数据无法完整解码为图片。", exception);
+            throw new InvalidDataException(
+                T(
+                    "返回的数据无法完整解码为图片。",
+                    "The returned data could not be fully decoded as an image."),
+                exception);
         }
     }
 
@@ -976,7 +1062,10 @@ public sealed partial class ConnectionTestService
         var singleLine = string.Join(
             " ",
             body.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
-        return $"服务信息：{singleLine}";
+        return F(
+            "服务信息：{0}",
+            "Service details: {0}",
+            singleLine);
     }
 
     private static string RedactSecrets(string value, string activeKey)
@@ -986,6 +1075,15 @@ public sealed partial class ConnectionTestService
             : value.Replace(activeKey, "<redacted>", StringComparison.Ordinal);
         return ApiKeyPattern().Replace(redacted, "<redacted>");
     }
+
+    private static string T(string chinese, string english) =>
+        Localizer.Text(chinese, english);
+
+    private static string F(
+        string chineseFormat,
+        string englishFormat,
+        params object?[] arguments) =>
+        Localizer.Format(chineseFormat, englishFormat, arguments);
 
     private sealed record StreamRequestResult(
         bool Success,
@@ -1004,7 +1102,10 @@ public sealed partial class ConnectionTestService
 
     private sealed class ResponseBodyLimitException(int maximumBytes)
         : IOException(
-            $"服务响应超过安全上限（{maximumBytes / (1024 * 1024.0):0.#} MB）。");
+            F(
+                "服务响应超过安全上限（{0:0.#} MB）。",
+                "The service response exceeded the safety limit ({0:0.#} MB).",
+                maximumBytes / (1024 * 1024.0)));
 
     private sealed class StreamAccumulator
     {

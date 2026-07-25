@@ -15,7 +15,7 @@ product.
 
 ## Install
 
-1. Download `CodexProviderSwitcher-v1.1.0-win-x64.zip` from the latest GitHub
+1. Download `CodexProviderSwitcher-v1.2.0-win-x64.zip` from the latest GitHub
    Release.
 2. Extract the archive.
 3. Run `install.ps1` from PowerShell.
@@ -23,6 +23,9 @@ product.
 
 Windows 10 or 11 and the .NET 8 Windows Desktop Runtime are required. The
 release is currently unsigned, so Windows SmartScreen may ask for confirmation.
+
+Use the `CHN / ENG` selector in the window header to change the complete
+interface language. The selection is remembered for the next launch.
 
 ## Safety model
 
@@ -104,7 +107,7 @@ already included on the target machine. A .NET 8 SDK is needed only to build.
 To create the versioned ZIP and SHA-256 file used by GitHub Releases:
 
 ```powershell
-.\release.ps1 -Version 1.1.0 -DotNet "C:\path\to\dotnet.exe"
+.\release.ps1 -Version 1.2.0 -DotNet "C:\path\to\dotnet.exe"
 ```
 
 The installed files are placed in:

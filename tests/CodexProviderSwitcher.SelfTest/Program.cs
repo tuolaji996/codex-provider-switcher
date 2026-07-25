@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using CodexProviderSwitcher.Core;
 
 var failures = new List<string>();
@@ -10,6 +11,47 @@ void Check(bool condition, string message)
         failures.Add(message);
     }
 }
+
+Check(
+    Localizer.NormalizeCode(null) == Localizer.ChineseCode,
+    "A missing language did not default to Chinese.");
+Check(
+    Localizer.NormalizeCode("ENG") == Localizer.EnglishCode,
+    "The ENG language alias was not normalized.");
+Check(
+    Localizer.NormalizeCode("en-CA") == Localizer.EnglishCode,
+    "An English locale was not normalized.");
+Check(
+    Localizer.NormalizeCode("unsupported") == Localizer.ChineseCode,
+    "An unsupported language did not fall back to Chinese.");
+
+Localizer.Use(AppLanguage.English);
+Check(
+    Localizer.Text("中文", "English") == "English",
+    "English text selection failed.");
+Check(
+    Localizer.Format("值 {0}", "Value {0}", 7) == "Value 7",
+    "English localized formatting failed.");
+var invalidEnglishSse = ConnectionTestService.AnalyzeSse("data: not-json\n\n");
+Check(
+    invalidEnglishSse.Error == "SSE data is not valid JSON.",
+    "English SSE diagnostics were not localized.");
+
+var languageSettingsJson = JsonSerializer.Serialize(
+    new SwitcherSettings { UiLanguage = Localizer.EnglishCode });
+var reloadedLanguageSettings =
+    JsonSerializer.Deserialize<SwitcherSettings>(languageSettingsJson);
+Check(
+    reloadedLanguageSettings?.UiLanguage == Localizer.EnglishCode,
+    "The selected language did not survive a settings JSON round trip.");
+
+Localizer.Use(AppLanguage.Chinese);
+Check(
+    Localizer.Text("中文", "English") == "中文",
+    "Chinese text selection failed.");
+Check(
+    new SwitcherSettings().UiLanguage == Localizer.ChineseCode,
+    "New settings did not default to Chinese.");
 
 bool HasRunnableDefaultWsl()
 {

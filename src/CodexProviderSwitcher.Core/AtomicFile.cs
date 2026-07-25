@@ -7,7 +7,11 @@ internal static class AtomicFile
     public static void WriteAllText(string path, string content)
     {
         var directory = Path.GetDirectoryName(path)
-            ?? throw new InvalidOperationException($"Cannot determine parent directory for {path}.");
+            ?? throw new InvalidOperationException(
+                Localizer.Format(
+                    "无法确定 {0} 的父目录。",
+                    "Cannot determine the parent directory for {0}.",
+                    path));
         Directory.CreateDirectory(directory);
 
         var temporaryPath = Path.Combine(

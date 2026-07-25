@@ -50,7 +50,9 @@ public sealed partial class HostCapabilityDiagnosticsService
                 null,
                 null,
                 EmptyFeatureStates(),
-                "未找到原生 Windows Codex CLI。");
+                Localizer.Text(
+                    "未找到原生 Windows Codex CLI。",
+                    "Native Windows Codex CLI was not found."));
         }
 
         var loginResult = await RunCliCommandAsync(
@@ -365,29 +367,48 @@ public sealed partial class HostCapabilityDiagnosticsService
 
     private static string BuildSummary(
         bool? chatGptLoggedIn,
-        HostFeatureStates features) =>
-        string.Join(
-            "；",
-            $"ChatGPT 登录：{FormatLoginState(chatGptLoggedIn)}",
-            $"Apps：{FormatState(features.AppsEnabled)}",
-            $"插件：{FormatState(features.PluginsEnabled)}",
-            $"Remote：{FormatState(features.RemotePluginEnabled)}",
-            $"图片生成：{FormatState(features.ImageGenerationEnabled)}") + "。";
+        HostFeatureStates features)
+    {
+        var separator = Localizer.Text("；", "; ");
+        return string.Join(
+                   separator,
+                   Localizer.Format(
+                       "ChatGPT 登录：{0}",
+                       "ChatGPT sign-in: {0}",
+                       FormatLoginState(chatGptLoggedIn)),
+                   Localizer.Format(
+                       "Apps：{0}",
+                       "Apps: {0}",
+                       FormatState(features.AppsEnabled)),
+                   Localizer.Format(
+                       "插件：{0}",
+                       "Plugins: {0}",
+                       FormatState(features.PluginsEnabled)),
+                   Localizer.Format(
+                       "Remote：{0}",
+                       "Remote: {0}",
+                       FormatState(features.RemotePluginEnabled)),
+                   Localizer.Format(
+                       "图片生成：{0}",
+                       "Image generation: {0}",
+                       FormatState(features.ImageGenerationEnabled))) +
+               Localizer.Text("。", ".");
+    }
 
     private static string FormatLoginState(bool? state) =>
         state switch
         {
-            true => "已登录",
-            false => "未检测到",
-            null => "未知"
+            true => Localizer.Text("已登录", "Signed in"),
+            false => Localizer.Text("未检测到", "Not detected"),
+            null => Localizer.Text("未知", "Unknown")
         };
 
     private static string FormatState(bool? state) =>
         state switch
         {
-            true => "已启用",
-            false => "未启用",
-            null => "未知"
+            true => Localizer.Text("已启用", "Enabled"),
+            false => Localizer.Text("未启用", "Disabled"),
+            null => Localizer.Text("未知", "Unknown")
         };
 
     private static string StripAnsi(string value) =>

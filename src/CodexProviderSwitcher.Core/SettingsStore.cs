@@ -32,6 +32,8 @@ public sealed class SettingsStore
             settings = new SwitcherSettings();
         }
 
+        settings.UiLanguage = Localizer.NormalizeCode(settings.UiLanguage);
+
         if (currentStatus.Mode == ProviderMode.Official)
         {
             if (!string.IsNullOrWhiteSpace(currentStatus.Model))

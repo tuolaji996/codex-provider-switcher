@@ -95,7 +95,11 @@ public sealed partial class ConfigService
         configPath ??= AppPaths.ConfigPath;
         if (!File.Exists(configPath))
         {
-            throw new FileNotFoundException("Codex config.toml was not found.", configPath);
+            throw new FileNotFoundException(
+                Localizer.Text(
+                    "未找到 Codex config.toml。",
+                    "Codex config.toml was not found."),
+                configPath);
         }
 
         var folder = Path.Combine(
@@ -118,7 +122,11 @@ public sealed partial class ConfigService
         if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) ||
             (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
         {
-            throw new ArgumentException("Base URL 必须是完整的 http:// 或 https:// 地址。", nameof(value));
+            throw new ArgumentException(
+                Localizer.Text(
+                    "Base URL 必须是完整的 http:// 或 https:// 地址。",
+                    "Base URL must be a complete http:// or https:// address."),
+                nameof(value));
         }
 
         return uri.ToString().TrimEnd('/');
