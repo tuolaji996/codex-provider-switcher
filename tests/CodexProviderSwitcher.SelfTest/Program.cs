@@ -11,6 +11,35 @@ void Check(bool condition, string message)
     }
 }
 
+bool HasRunnableDefaultWsl()
+{
+    try
+    {
+        using var probe = Process.Start(new ProcessStartInfo
+        {
+            FileName = "wsl.exe",
+            ArgumentList = { "--exec", "true" },
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        });
+        if (probe is null || !probe.WaitForExit(10000))
+        {
+            probe?.Kill(entireProcessTree: true);
+            return false;
+        }
+
+        return probe.ExitCode == 0;
+    }
+    catch (Exception exception) when (
+        exception is System.ComponentModel.Win32Exception or
+        InvalidOperationException)
+    {
+        return false;
+    }
+}
+
 var service = new ConfigService();
 var original = """
     model_provider = "OpenAI"
@@ -25,6 +54,16 @@ var original = """
 
     [features]
     hooks = true
+    apps = true
+    plugins = true
+    remote_plugin = true
+    image_generation = true
+
+    [plugins.github]
+    enabled = true
+
+    [plugin_marketplaces.personal]
+    source = "https://example.invalid/codex-marketplace.json"
 
     [mcp_servers.sample]
     command = "sample.exe"
@@ -53,6 +92,20 @@ Check(
     thirdParty.Contains("[mcp_servers.sample]", StringComparison.Ordinal),
     "Unrelated MCP configuration was removed.");
 Check(
+    thirdParty.Contains("[features]", StringComparison.Ordinal) &&
+    thirdParty.Contains("image_generation = true", StringComparison.Ordinal),
+    "Feature configuration was removed in third-party mode.");
+Check(
+    thirdParty.Contains("[plugins.github]", StringComparison.Ordinal) &&
+    thirdParty.Contains("enabled = true", StringComparison.Ordinal),
+    "Plugin configuration was removed in third-party mode.");
+Check(
+    thirdParty.Contains("[plugin_marketplaces.personal]", StringComparison.Ordinal) &&
+    thirdParty.Contains(
+        "source = \"https://example.invalid/codex-marketplace.json\"",
+        StringComparison.Ordinal),
+    "Plugin marketplace configuration was removed in third-party mode.");
+Check(
     thirdParty.Split(
         "[model_providers.OpenAI]",
         StringSplitOptions.None).Length == 2,
@@ -69,6 +122,20 @@ Check(officialStatus.UsesOfficialAuthentication, "Official authentication was no
 Check(
     !official.Contains("[model_providers.OpenAI.auth]", StringComparison.Ordinal),
     "Third-party auth helper remained in official mode.");
+Check(
+    official.Contains("[features]", StringComparison.Ordinal) &&
+    official.Contains("image_generation = true", StringComparison.Ordinal),
+    "Feature configuration was removed after the official round trip.");
+Check(
+    official.Contains("[plugins.github]", StringComparison.Ordinal) &&
+    official.Contains("enabled = true", StringComparison.Ordinal),
+    "Plugin configuration was removed after the official round trip.");
+Check(
+    official.Contains("[plugin_marketplaces.personal]", StringComparison.Ordinal) &&
+    official.Contains(
+        "source = \"https://example.invalid/codex-marketplace.json\"",
+        StringComparison.Ordinal),
+    "Plugin marketplace configuration was removed after the official round trip.");
 
 var officialAgain = service.BuildOfficialConfig(official, "gpt-5.6-sol", "gpt-5.5");
 Check(official == officialAgain, "Official configuration rewrite is not idempotent.");
@@ -76,6 +143,173 @@ Check(official == officialAgain, "Official configuration rewrite is not idempote
 var noReview = service.BuildOfficialConfig(official, "gpt-5.6-sol", null);
 var noReviewStatus = service.ParseStatus(noReview);
 Check(noReviewStatus.ReviewModel is null, "Optional official review model was not removed.");
+
+var completedStream = ConnectionTestService.AnalyzeSse(
+    """
+    data: {"type":"response.created","response":{"id":"resp_self_test","status":"in_progress"}}
+
+    data: {"type":"response.output_text.delta","delta":"PLUGIN_"}
+
+    data: {"type":"response.output_text.delta","delta":"OK"}
+
+    data: {"type":"response.completed","response":{"id":"resp_self_test","status":"completed"}}
+
+    data: [DONE]
+
+    """);
+Check(completedStream.SawJsonEvent, "Completed SSE did not report any JSON events.");
+Check(completedStream.Completed, "Completed SSE was not classified as completed.");
+Check(!completedStream.Failed, "Completed SSE was incorrectly classified as failed.");
+Check(completedStream.OutputText == "PLUGIN_OK", "Completed SSE output text was assembled incorrectly.");
+Check(completedStream.ResponseId == "resp_self_test", "Completed SSE response ID was not extracted.");
+
+var truncatedStream = ConnectionTestService.AnalyzeSse(
+    """
+    data: {"type":"response.output_text.delta","delta":"partial"}
+
+    """);
+Check(truncatedStream.SawJsonEvent, "Truncated SSE did not report its JSON event.");
+Check(!truncatedStream.Completed, "Truncated SSE was incorrectly classified as completed.");
+Check(!truncatedStream.Failed, "A valid but truncated SSE event was incorrectly classified as failed.");
+
+var incompleteStream = ConnectionTestService.AnalyzeSse(
+    """
+    data: {"type":"response.incomplete","response":{"id":"resp_incomplete","status":"incomplete"}}
+
+    """);
+Check(incompleteStream.SawJsonEvent, "Incomplete SSE did not report its JSON event.");
+Check(!incompleteStream.Completed, "Incomplete SSE was incorrectly classified as completed.");
+Check(incompleteStream.Failed, "Explicit response.incomplete SSE was not classified as failed.");
+
+var functionCallStream = ConnectionTestService.AnalyzeSse(
+    """
+    data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_self_test","type":"function_call","call_id":"call_self_test","name":"provider_probe","arguments":""}}
+
+    data: {"type":"response.function_call_arguments.delta","item_id":"fc_self_test","output_index":0,"delta":"{\"value\":"}
+
+    data: {"type":"response.function_call_arguments.delta","item_id":"fc_self_test","output_index":0,"delta":"\"PLUGIN_OK\"}"}
+
+    data: {"type":"response.function_call_arguments.done","item_id":"fc_self_test","output_index":0,"arguments":"{\"value\":\"PLUGIN_OK\"}"}
+
+    data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_self_test","type":"function_call","call_id":"call_self_test","name":"provider_probe","arguments":"{\"value\":\"PLUGIN_OK\"}"}}
+
+    data: {"type":"response.completed","response":{"id":"resp_function","status":"completed","output":[{"id":"rs_self_test","type":"reasoning","summary":[]},{"id":"fc_self_test","type":"function_call","call_id":"call_self_test","name":"provider_probe","arguments":"{\"value\":\"PLUGIN_OK\"}"}]}}
+
+    """);
+Check(functionCallStream.Completed, "Function-call SSE was not classified as completed.");
+Check(functionCallStream.FunctionCallId == "call_self_test", "Function call ID was not extracted.");
+Check(functionCallStream.FunctionName == "provider_probe", "Function name was not extracted.");
+Check(
+    functionCallStream.FunctionArguments == """{"value":"PLUGIN_OK"}""",
+    "Function arguments were not extracted.");
+Check(
+    functionCallStream.OutputItemsJson?.Contains(
+        "\"type\":\"reasoning\"",
+        StringComparison.Ordinal) == true,
+    "Complete reasoning output items were not retained for tool-result replay.");
+
+var streamedOutputFallback = ConnectionTestService.AnalyzeSse(
+    """
+    data: {"type":"response.output_item.done","output_index":0,"item":{"id":"rs_streamed","type":"reasoning","encrypted_content":"opaque"}}
+
+    data: {"type":"response.output_item.done","output_index":1,"item":{"id":"fc_streamed","type":"function_call","call_id":"call_streamed","name":"capability_probe","arguments":"{\"value\":\"ready\"}"}}
+
+    data: {"type":"response.completed","response":{"id":"resp_streamed","status":"completed","output":[]}}
+
+    """);
+Check(
+    streamedOutputFallback.OutputItemsJson?.Contains(
+        "\"call_id\":\"call_streamed\"",
+        StringComparison.Ordinal) == true,
+    "An empty completed.output array discarded streamed output_item.done items.");
+Check(
+    streamedOutputFallback.OutputItemsJson?.Contains(
+        "\"encrypted_content\":\"opaque\"",
+        StringComparison.Ordinal) == true,
+    "Streamed reasoning content was not retained for stateless replay.");
+
+var expectedImageBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x01, 0x02 };
+var encodedImage = Convert.ToBase64String(expectedImageBytes);
+var imageApiImage = ConnectionTestService.ExtractImageApiBytes(
+    $$"""{"data":[{"b64_json":"{{encodedImage}}"}]}""");
+Check(
+    imageApiImage is not null && imageApiImage.SequenceEqual(expectedImageBytes),
+    "Images API JSON was not decoded.");
+Check(
+    ConnectionTestService.ExtractImageApiBytes(
+        """{"data":[{"b64_json":"not-base64"}]}""") is null,
+    "Invalid Images API base64 was incorrectly accepted.");
+var validOnePixelPng = Convert.FromBase64String(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+Check(
+    ConnectionTestService.IsDecodableImage(validOnePixelPng),
+    "A valid PNG was not fully decoded.");
+Check(
+    !ConnectionTestService.IsDecodableImage(
+        validOnePixelPng[..(validOnePixelPng.Length / 2)]),
+    "A truncated PNG was incorrectly accepted as decodable.");
+
+Check(
+    HostCapabilityDiagnosticsService.ParseChatGptLoginStatus(
+        "\u001b[32mLogged in using ChatGPT\u001b[0m") == true,
+    "ChatGPT login status was not detected through ANSI formatting.");
+Check(
+    HostCapabilityDiagnosticsService.ParseChatGptLoginStatus("Not logged in") == false,
+    "Logged-out status was not detected.");
+Check(
+    HostCapabilityDiagnosticsService.ParseChatGptLoginStatus("Logged in using API key") == false,
+    "A non-ChatGPT login method was incorrectly accepted as ChatGPT login.");
+Check(
+    HostCapabilityDiagnosticsService.ParseChatGptLoginStatus("unexpected output") is null,
+    "Unknown login output was not classified as unknown.");
+
+var hostFeatures = HostCapabilityDiagnosticsService.ParseFeatureList(
+    """
+    apps                  stable        true
+    plugins               experimental  true
+    remote_plugin         experimental  false
+    image_generation      stable        true
+    unrelated_feature     stable        true
+    """);
+Check(hostFeatures.AppsEnabled == true, "Apps feature state was not parsed.");
+Check(hostFeatures.PluginsEnabled == true, "Plugins feature state was not parsed.");
+Check(hostFeatures.RemotePluginEnabled == false, "Remote plugin feature state was not parsed.");
+Check(hostFeatures.ImageGenerationEnabled == true, "Image generation feature state was not parsed.");
+var partialHostFeatures = HostCapabilityDiagnosticsService.ParseFeatureList("apps true");
+Check(partialHostFeatures.AppsEnabled == true, "Two-column feature output was not parsed.");
+Check(
+    partialHostFeatures.PluginsEnabled is null &&
+    partialHostFeatures.RemotePluginEnabled is null &&
+    partialHostFeatures.ImageGenerationEnabled is null,
+    "Missing feature states were not left unknown.");
+
+var cliOverrideRoot = Path.Combine(
+    Path.GetTempPath(),
+    $"codex-provider-switcher-cli-override-{Guid.NewGuid():N}");
+Directory.CreateDirectory(cliOverrideRoot);
+try
+{
+    var cliOverridePath = Path.Combine(cliOverrideRoot, "codex.exe");
+    File.WriteAllBytes(cliOverridePath, []);
+    Check(
+        HostCapabilityDiagnosticsService.FindCodexCliPath(cliOverridePath, null) ==
+        Path.GetFullPath(cliOverridePath),
+        "Explicit CODEX_CLI_PATH file override was not resolved.");
+    Check(
+        HostCapabilityDiagnosticsService.FindCodexCliPath(cliOverrideRoot, null) ==
+        Path.GetFullPath(cliOverridePath),
+        "CODEX_CLI_PATH directory override was not resolved.");
+
+    var invalidOverridePath = Path.Combine(cliOverrideRoot, "codex.cmd");
+    File.WriteAllBytes(invalidOverridePath, []);
+    Check(
+        HostCapabilityDiagnosticsService.FindCodexCliPath(invalidOverridePath, null) is null,
+        "A non-executable CLI override extension was incorrectly accepted.");
+}
+finally
+{
+    Directory.Delete(cliOverrideRoot, true);
+}
 
 var temporaryCodexHome = Path.Combine(
     Path.GetTempPath(),
@@ -133,33 +367,39 @@ try
             Check(output == testSecret, "Token broker returned the wrong credential.");
         }
 
-        var brokerWslPath = ConfigService.ToWslPath(args[0]);
-        var wslStartInfo = new ProcessStartInfo
+        if (HasRunnableDefaultWsl())
         {
-            FileName = "wsl.exe",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-        wslStartInfo.ArgumentList.Add("-d");
-        wslStartInfo.ArgumentList.Add("Ubuntu");
-        wslStartInfo.ArgumentList.Add("--");
-        wslStartInfo.ArgumentList.Add(brokerWslPath);
-        wslStartInfo.ArgumentList.Add("--credential-target");
-        wslStartInfo.ArgumentList.Add(testTarget);
+            var brokerWslPath = ConfigService.ToWslPath(args[0]);
+            var wslStartInfo = new ProcessStartInfo
+            {
+                FileName = "wsl.exe",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            wslStartInfo.ArgumentList.Add("--");
+            wslStartInfo.ArgumentList.Add(brokerWslPath);
+            wslStartInfo.ArgumentList.Add("--credential-target");
+            wslStartInfo.ArgumentList.Add(testTarget);
 
-        using var wslBroker = Process.Start(wslStartInfo);
-        if (wslBroker is null)
-        {
-            failures.Add("WSL token broker did not start.");
+            using var wslBroker = Process.Start(wslStartInfo);
+            if (wslBroker is null)
+            {
+                failures.Add("WSL token broker did not start.");
+            }
+            else
+            {
+                var wslOutput = wslBroker.StandardOutput.ReadToEnd();
+                wslBroker.WaitForExit();
+                Check(wslBroker.ExitCode == 0, "WSL token broker returned a non-zero exit code.");
+                Check(wslOutput == testSecret, "WSL token broker returned the wrong credential.");
+            }
         }
         else
         {
-            var wslOutput = wslBroker.StandardOutput.ReadToEnd();
-            wslBroker.WaitForExit();
-            Check(wslBroker.ExitCode == 0, "WSL token broker returned a non-zero exit code.");
-            Check(wslOutput == testSecret, "WSL token broker returned the wrong credential.");
+            Console.WriteLine(
+                "WSL token-broker integration test skipped: no runnable default distribution.");
         }
     }
 }
@@ -250,6 +490,55 @@ if (args.Length >= 3 && File.Exists(args[1]) && File.Exists(args[2]))
     finally
     {
         Directory.Delete(validationRoot, true);
+    }
+}
+
+var liveCapabilitiesIndex = Array.IndexOf(args, "--live-capabilities");
+if (liveCapabilitiesIndex >= 0)
+{
+    if (args.Length < liveCapabilitiesIndex + 4)
+    {
+        failures.Add(
+            "Usage: --live-capabilities <base-url> <responses-model> <image-model>");
+    }
+    else
+    {
+        var liveBaseUrl = args[liveCapabilitiesIndex + 1];
+        var liveResponsesModel = args[liveCapabilitiesIndex + 2];
+        var liveImageModel = args[liveCapabilitiesIndex + 3];
+        var liveKey = CredentialVault.Read(AppPaths.CredentialTarget);
+        if (string.IsNullOrWhiteSpace(liveKey))
+        {
+            failures.Add(
+                $"No credential is stored under {AppPaths.CredentialTarget}.");
+        }
+        else
+        {
+            var probe = new ConnectionTestService();
+            var textResult = await probe.TestResponsesApiAsync(
+                liveBaseUrl,
+                liveResponsesModel,
+                liveKey);
+            Console.WriteLine($"Live text probe: {textResult.Summary}");
+            Check(textResult.Success, "Live Responses text probe failed.");
+
+            var toolResult = await probe.TestFunctionCallingAsync(
+                liveBaseUrl,
+                liveResponsesModel,
+                liveKey);
+            Console.WriteLine($"Live tool probe: {toolResult.Summary}");
+            Check(toolResult.Success, "Live function-call round trip failed.");
+
+            if (!args.Contains("--skip-live-image", StringComparer.Ordinal))
+            {
+                var imageResult = await probe.TestImageGenerationAsync(
+                    liveBaseUrl,
+                    liveImageModel,
+                    liveKey);
+                Console.WriteLine($"Live image probe: {imageResult.Summary}");
+                Check(imageResult.Success, "Live image generation probe failed.");
+            }
+        }
     }
 }
 

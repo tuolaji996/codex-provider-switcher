@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = "1.0.0",
+    [string]$Version = "1.1.0",
     [string]$DotNet = "dotnet"
 )
 
@@ -13,6 +13,18 @@ $packageName = "CodexProviderSwitcher-v$Version-win-x64"
 $stage = Join-Path $releaseRoot $packageName
 $archive = Join-Path $releaseRoot "$packageName.zip"
 $checksum = Join-Path $releaseRoot "$packageName.sha256"
+
+$versionProjects = @(
+    (Join-Path $root "src\CodexProviderSwitcher\CodexProviderSwitcher.csproj"),
+    (Join-Path $root "src\CodexProviderToken\CodexProviderToken.csproj")
+)
+foreach ($projectPath in $versionProjects) {
+    [xml]$project = Get-Content -LiteralPath $projectPath -Raw
+    $versionNode = $project.SelectSingleNode("/Project/PropertyGroup/Version")
+    if ($null -eq $versionNode -or $versionNode.InnerText -ne $Version) {
+        throw "Release version $Version does not match $projectPath."
+    }
+}
 
 & (Join-Path $root "build.ps1") -DotNet $DotNet
 

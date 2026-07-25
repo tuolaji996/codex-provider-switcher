@@ -6,6 +6,7 @@ public static class AppPaths
     public const string CredentialTarget = "CodexProviderSwitcher:sui-xiang";
     public const string DefaultBaseUrl = "https://sui-xiang.com/v1";
     public const string DefaultThirdPartyModel = "codex-auto-review";
+    public const string DefaultThirdPartyImageModel = "gpt-image-2";
     public const string DefaultOfficialModel = "gpt-5.6-sol";
     public const string CodexAppId = "OpenAI.Codex_2p2nqsd0c76g0!App";
 
@@ -33,4 +34,6 @@ public static class AppPaths
     public static string SettingsPath => Path.Combine(LocalDataRoot, "settings.json");
 
     public static string BackupsRoot => Path.Combine(LocalDataRoot, "Backups");
+
+    public static string DiagnosticsRoot => Path.Combine(LocalDataRoot, "Diagnostics");
 }

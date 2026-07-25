@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using CodexProviderSwitcher.Core;
@@ -13,6 +14,7 @@ public partial class MainWindow : Window
     private readonly SettingsStore _settingsStore = new();
     private readonly SessionHealthService _sessionHealthService = new();
     private readonly ConnectionTestService _connectionTestService = new();
+    private readonly HostCapabilityDiagnosticsService _hostDiagnosticsService = new();
     private readonly CodexProcessService _processService = new();
     private SwitcherSettings _settings = new();
     private bool _isBusy;
@@ -36,8 +38,11 @@ public partial class MainWindow : Window
             BaseUrlTextBox.Text = _settings.ThirdPartyBaseUrl;
             ModelTextBox.Text = _settings.ThirdPartyModel;
             RestartCheckBox.IsChecked = _settings.RestartAfterSwitch;
+            OpenGeneratedImageButton.IsEnabled = HasGeneratedImage();
+            UpdatePersistedProviderCapabilityStatuses();
             _isInitialized = true;
             await RefreshStatusAsync();
+            await RefreshCapabilitiesAsync();
             MainScrollViewer.ScrollToTop();
             Keyboard.ClearFocus();
             Focus();
@@ -141,6 +146,162 @@ public partial class MainWindow : Window
                 MessageBoxButton.OK,
                 result.Success ? MessageBoxImage.Information : MessageBoxImage.Warning);
         });
+    }
+
+    private async void RefreshCapabilitiesButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunBusyAsync(RefreshCapabilitiesAsync);
+    }
+
+    private async void TestToolCallingButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunBusyAsync(async () =>
+        {
+            SaveNonSecretSettings();
+            var key = ResolveAndOptionallySaveKey();
+            ToolCapabilityStatusText.Text =
+                "第三方插件工具调用：正在测试 function_call 与工具结果回传…";
+
+            ConnectionTestResult result;
+            try
+            {
+                result = await _connectionTestService.TestFunctionCallingAsync(
+                    _settings.ThirdPartyBaseUrl,
+                    _settings.ThirdPartyModel,
+                    key);
+            }
+            catch
+            {
+                ClearCurrentToolTestResult();
+                _settingsStore.Save(_settings);
+                UpdatePersistedProviderCapabilityStatuses();
+                throw;
+            }
+            ToolCapabilityStatusText.Text =
+                $"第三方插件工具调用：{result.Summary}";
+            OperationStatusText.Text = result.Summary;
+            if (result.Success)
+            {
+                _settings.LastSuccessfulToolTestUtc = DateTimeOffset.UtcNow;
+                _settings.LastToolTestedEndpointFingerprint =
+                    CurrentToolEndpointFingerprint();
+            }
+            else
+            {
+                ClearCurrentToolTestResult();
+            }
+            _settingsStore.Save(_settings);
+
+            MessageBox.Show(
+                this,
+                result.Summary,
+                result.Success ? "插件协议测试通过" : "插件协议测试未通过",
+                MessageBoxButton.OK,
+                result.Success ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        });
+    }
+
+    private async void TestImageGenerationButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show(
+                this,
+                "这会向第三方服务发送一次真实的 /images/generations 请求，" +
+                "用于验证 Codex 当前图片后端，可能消耗额度。继续吗？",
+                "生成测试图片",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Information) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        await RunBusyAsync(async () =>
+        {
+            SaveNonSecretSettings();
+            var key = ResolveAndOptionallySaveKey();
+            ImageCapabilityStatusText.Text =
+                "第三方图片生成：正在实测 Codex 当前使用的 Images API…";
+
+            ImageGenerationTestResult result;
+            try
+            {
+                result = await _connectionTestService.TestImageGenerationAsync(
+                    _settings.ThirdPartyBaseUrl,
+                    AppPaths.DefaultThirdPartyImageModel,
+                    key);
+            }
+            catch
+            {
+                ClearCurrentImageTestResult();
+                _settingsStore.Save(_settings);
+                UpdatePersistedProviderCapabilityStatuses();
+                throw;
+            }
+            ImageCapabilityStatusText.Text =
+                $"第三方图片生成：{result.Summary}";
+            OperationStatusText.Text = result.Summary;
+
+            if (result.Success && !string.IsNullOrWhiteSpace(result.ArtifactPath))
+            {
+                _settings.LastSuccessfulImageTestUtc = DateTimeOffset.UtcNow;
+                _settings.LastImageTestedEndpointFingerprint =
+                    CurrentImageEndpointFingerprint();
+                _settings.LastGeneratedImagePath = result.ArtifactPath;
+            }
+            else
+            {
+                ClearCurrentImageTestResult();
+            }
+            _settingsStore.Save(_settings);
+
+            MessageBox.Show(
+                this,
+                result.Summary,
+                result.Success ? "图片生成测试通过" : "图片生成测试未通过",
+                MessageBoxButton.OK,
+                result.Success ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        });
+    }
+
+    private void OpenGeneratedImageButton_Click(object sender, RoutedEventArgs e)
+    {
+        var path = _settings.LastGeneratedImagePath;
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            _settings.LastGeneratedImagePath = null;
+            _settingsStore.Save(_settings);
+            OpenGeneratedImageButton.IsEnabled = false;
+            UpdatePersistedProviderCapabilityStatuses();
+            MessageBox.Show(
+                this,
+                "尚未找到已生成的测试图片，请先运行图片生成测试。",
+                "测试图片不存在",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = path,
+            UseShellExecute = true
+        });
+    }
+
+    private void OpenRemoteSettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!HostCapabilityDiagnosticsService.OpenOfficialConnectionsSettings())
+        {
+            MessageBox.Show(
+                this,
+                "无法打开 Codex Connections。请先确认官方 Codex Windows 应用已安装。",
+                "无法打开 Remote 设置",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        OperationStatusText.Text =
+            "已打开官方 Connections 页面；请使用同一 ChatGPT 账号在手机端完成配对。";
     }
 
     private async void SwitchThirdPartyButton_Click(object sender, RoutedEventArgs e)
@@ -280,6 +441,17 @@ public partial class MainWindow : Window
 
         _settings.RestartAfterSwitch = RestartCheckBox.IsChecked == true;
         _settingsStore.Save(_settings);
+        UpdatePersistedProviderCapabilityStatuses();
+    }
+
+    private void ProviderSettingsTextBox_TextChanged(
+        object sender,
+        TextChangedEventArgs e)
+    {
+        if (_isInitialized)
+        {
+            UpdatePersistedProviderCapabilityStatuses();
+        }
     }
 
     private string ResolveAndOptionallySaveKey()
@@ -307,6 +479,106 @@ public partial class MainWindow : Window
             _settings.ThirdPartyBaseUrl,
             _settings.ThirdPartyModel,
             key);
+
+    private async Task RefreshCapabilitiesAsync()
+    {
+        HostCapabilityStatusText.Text = "官方登录与功能开关：正在检测…";
+        var diagnostics = await _hostDiagnosticsService.InspectAsync();
+        HostCapabilityStatusText.Text = $"官方宿主：{diagnostics.Summary}";
+
+        RemoteCapabilityStatusText.Text = diagnostics.ChatGptLoggedIn switch
+        {
+            false =>
+                "手机 Remote：官方 ChatGPT 登录未就绪，需先在 Codex 中登录。",
+            true when diagnostics.Features.RemotePluginEnabled == false =>
+                "手机 Remote：本机 remote_plugin 开关未启用。",
+            true when diagnostics.Features.RemotePluginEnabled == true =>
+                "手机 Remote：本机登录与功能开关已就绪；仍需在官方 Connections 页面用手机实机配对。",
+            _ =>
+                "手机 Remote：本机状态未完整识别；可打开官方 Connections 页面继续检查。"
+        };
+    }
+
+    private bool HasGeneratedImage() =>
+        !string.IsNullOrWhiteSpace(_settings.LastGeneratedImagePath) &&
+        File.Exists(_settings.LastGeneratedImagePath);
+
+    private string CurrentToolEndpointFingerprint() =>
+        ConnectionTestService.EndpointFingerprint(
+            _settings.ThirdPartyBaseUrl,
+            _settings.ThirdPartyModel);
+
+    private string CurrentImageEndpointFingerprint() =>
+        ConnectionTestService.EndpointFingerprint(
+            _settings.ThirdPartyBaseUrl,
+            AppPaths.DefaultThirdPartyImageModel);
+
+    private void UpdatePersistedProviderCapabilityStatuses()
+    {
+        string? displayedToolFingerprint = null;
+        string? displayedImageFingerprint = null;
+        try
+        {
+            var displayedBaseUrl =
+                ConfigService.NormalizeBaseUrl(BaseUrlTextBox.Text);
+            var displayedModel = ModelTextBox.Text.Trim();
+            if (!string.IsNullOrWhiteSpace(displayedModel))
+            {
+                displayedToolFingerprint =
+                    ConnectionTestService.EndpointFingerprint(
+                        displayedBaseUrl,
+                        displayedModel);
+            }
+            displayedImageFingerprint =
+                ConnectionTestService.EndpointFingerprint(
+                    displayedBaseUrl,
+                    AppPaths.DefaultThirdPartyImageModel);
+        }
+        catch (ArgumentException)
+        {
+            // An incomplete edit is untested until it becomes a valid URL.
+        }
+
+        ToolCapabilityStatusText.Text =
+            _settings.LastSuccessfulToolTestUtc is { } toolTestUtc &&
+            displayedToolFingerprint is not null &&
+            _settings.LastToolTestedEndpointFingerprint ==
+            displayedToolFingerprint
+                ? $"第三方插件工具调用：已实测通过（{FormatLocalTime(toolTestUtc)}）"
+                : "第三方插件工具调用：尚未实测";
+
+        ImageCapabilityStatusText.Text =
+            _settings.LastSuccessfulImageTestUtc is { } imageTestUtc &&
+            displayedImageFingerprint is not null &&
+            _settings.LastImageTestedEndpointFingerprint ==
+            displayedImageFingerprint &&
+            HasGeneratedImage()
+                ? $"第三方图片生成：已实测通过（{FormatLocalTime(imageTestUtc)}），测试图片已保存"
+                : "第三方图片生成：尚未实测";
+    }
+
+    private void ClearCurrentToolTestResult()
+    {
+        if (_settings.LastToolTestedEndpointFingerprint ==
+            CurrentToolEndpointFingerprint())
+        {
+            _settings.LastSuccessfulToolTestUtc = null;
+            _settings.LastToolTestedEndpointFingerprint = null;
+        }
+    }
+
+    private void ClearCurrentImageTestResult()
+    {
+        if (_settings.LastImageTestedEndpointFingerprint ==
+            CurrentImageEndpointFingerprint())
+        {
+            _settings.LastSuccessfulImageTestUtc = null;
+            _settings.LastImageTestedEndpointFingerprint = null;
+        }
+    }
+
+    private static string FormatLocalTime(DateTimeOffset timestamp) =>
+        timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
 
     private async Task RestartIfRequestedAsync()
     {
@@ -368,6 +640,11 @@ public partial class MainWindow : Window
         SaveKeyButton.IsEnabled = !busy;
         DeleteKeyButton.IsEnabled = !busy;
         TestConnectionButton.IsEnabled = !busy;
+        RefreshCapabilitiesButton.IsEnabled = !busy;
+        TestToolCallingButton.IsEnabled = !busy;
+        TestImageGenerationButton.IsEnabled = !busy;
+        OpenGeneratedImageButton.IsEnabled = !busy && HasGeneratedImage();
+        OpenRemoteSettingsButton.IsEnabled = !busy;
         SwitchThirdPartyButton.IsEnabled = !busy;
         SwitchOfficialButton.IsEnabled = !busy;
         BaseUrlTextBox.IsEnabled = !busy;

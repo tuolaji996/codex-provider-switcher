@@ -41,6 +41,18 @@ public sealed class SettingsStore
 
             settings.OfficialReviewModel = currentStatus.ReviewModel;
         }
+        else if (currentStatus.Mode == ProviderMode.ThirdParty)
+        {
+            if (!string.IsNullOrWhiteSpace(currentStatus.BaseUrl))
+            {
+                settings.ThirdPartyBaseUrl = currentStatus.BaseUrl;
+            }
+
+            if (!string.IsNullOrWhiteSpace(currentStatus.Model))
+            {
+                settings.ThirdPartyModel = currentStatus.Model;
+            }
+        }
 
         Save(settings);
         return settings;

@@ -3,9 +3,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Codex Provider Switcher"
         Width="880"
-        Height="720"
-        MinWidth="760"
-        MinHeight="650"
+        Height="760"
+        MinWidth="680"
+        MinHeight="520"
         Background="{StaticResource WindowBrush}"
         Foreground="{StaticResource TextBrush}"
         WindowStartupLocation="CenterScreen">
@@ -14,6 +14,7 @@
                   VerticalScrollBarVisibility="Auto">
         <Grid Margin="34" Background="{StaticResource WindowBrush}">
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -136,6 +137,7 @@
                     <TextBox Grid.Row="1"
                              Grid.Column="1"
                              x:Name="BaseUrlTextBox"
+                             TextChanged="ProviderSettingsTextBox_TextChanged"
                              Margin="0,0,0,11" />
 
                     <TextBlock Grid.Row="2"
@@ -146,6 +148,7 @@
                     <TextBox Grid.Row="2"
                              Grid.Column="1"
                              x:Name="ModelTextBox"
+                             TextChanged="ProviderSettingsTextBox_TextChanged"
                              Margin="0,0,0,11" />
 
                     <TextBlock Grid.Row="3"
@@ -212,6 +215,70 @@
                     CornerRadius="12"
                     Padding="20"
                     Margin="0,0,0,16">
+                <StackPanel>
+                    <TextBlock Text="能力诊断" FontSize="17" FontWeight="SemiBold" />
+                    <TextBlock Text="官方账号能力保留在本机；第三方模型仍需通过 Responses 工具协议与图片接口实测。"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               Margin="0,5,0,0"
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="HostCapabilityStatusText"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               Margin="0,13,0,0"
+                               Text="官方登录与功能开关：正在检测…"
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="ToolCapabilityStatusText"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               Margin="0,7,0,0"
+                               Text="第三方插件工具调用：尚未实测"
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="ImageCapabilityStatusText"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               Margin="0,7,0,0"
+                               Text="第三方图片生成：尚未实测"
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="RemoteCapabilityStatusText"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               Margin="0,7,0,0"
+                               Text="手机 Remote：需使用相同 ChatGPT 账号在官方 Connections 页面扫码配对"
+                               TextWrapping="Wrap" />
+                    <WrapPanel Margin="0,15,0,0">
+                        <Button x:Name="RefreshCapabilitiesButton"
+                                Content="刷新官方能力"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,8,8"
+                                Click="RefreshCapabilitiesButton_Click" />
+                        <Button x:Name="TestToolCallingButton"
+                                Content="测试插件工具调用"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,8,8"
+                                Click="TestToolCallingButton_Click" />
+                        <Button x:Name="TestImageGenerationButton"
+                                Content="生成测试图片"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,8,8"
+                                Click="TestImageGenerationButton_Click" />
+                        <Button x:Name="OpenGeneratedImageButton"
+                                Content="打开测试图片"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,8,8"
+                                IsEnabled="False"
+                                Click="OpenGeneratedImageButton_Click" />
+                        <Button x:Name="OpenRemoteSettingsButton"
+                                Content="打开 Remote 设置"
+                                Style="{StaticResource PrimaryButton}"
+                                Margin="0,0,0,8"
+                                Click="OpenRemoteSettingsButton_Click" />
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="4"
+                    Background="{StaticResource PanelBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="12"
+                    Padding="20"
+                    Margin="0,0,0,16">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -233,7 +300,7 @@
                 </Grid>
             </Border>
 
-            <Border Grid.Row="4"
+            <Border Grid.Row="5"
                     Background="#101720"
                     BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="1"

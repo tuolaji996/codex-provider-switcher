@@ -1,8 +1,18 @@
 param(
-    [string]$PublishDirectory = (Join-Path $PSScriptRoot "artifacts\publish")
+    [string]$PublishDirectory
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($PublishDirectory)) {
+    $packagedExecutable = Join-Path $PSScriptRoot "CodexProviderSwitcher.exe"
+    $PublishDirectory = if (Test-Path -LiteralPath $packagedExecutable) {
+        $PSScriptRoot
+    }
+    else {
+        Join-Path $PSScriptRoot "artifacts\publish"
+    }
+}
+
 $installDirectory = Join-Path $env:LOCALAPPDATA "Programs\CodexProviderSwitcher"
 $appSource = Join-Path $PublishDirectory "CodexProviderSwitcher.exe"
 $brokerSource = Join-Path $PublishDirectory "CodexProviderToken.exe"
