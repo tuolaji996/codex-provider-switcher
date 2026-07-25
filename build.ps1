@@ -79,6 +79,18 @@ Copy-Item `
     -Destination (Join-Path $publish "CodexProviderToken.exe") `
     -Force
 
+foreach ($supportFile in @(
+    "install.ps1",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+)) {
+    Copy-Item `
+        -LiteralPath (Join-Path $root $supportFile) `
+        -Destination (Join-Path $publish $supportFile) `
+        -Force
+}
+
 Invoke-DotNet @(
     "run",
     "--project",

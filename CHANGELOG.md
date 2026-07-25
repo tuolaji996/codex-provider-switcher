@@ -2,6 +2,44 @@
 
 All notable changes to this project are documented here.
 
+## [1.3.0] - 2026-07-25
+
+### Added
+
+- A native Windows navigation workspace with Home, Providers, Diagnostics,
+  Backups, and Settings views.
+- Persistent Light, Dark, and System appearance modes.
+- A dense, read-only backup table with refresh and folder-opening actions.
+- Responsive icon-only navigation at narrow window widths.
+
+### Changed
+
+- Provider switching and shared-history health are now visible from the Home
+  view, while endpoint and credential management have a dedicated view.
+- Capability results now use semantic status indicators alongside their full
+  text.
+- Mobile Remote guidance now opens official Codex and correctly points initial
+  pairing to the official **Set up Remote** entry instead of treating SSH
+  Connections as phone pairing.
+- The local build output is now a complete install source, including current
+  documentation and license files.
+
+### Fixed
+
+- Upgrade installation now stages and replaces the application directory,
+  preventing stale README or CHANGELOG files from older releases.
+- Theme-dependent colors now update dynamically instead of remaining tied to
+  the previous dark-only palette.
+
+### Verified
+
+- Existing provider, stable-history, SSE, tool-calling, image, host, credential,
+  and configuration round-trip self-tests continue to pass.
+- Light and Dark appearances, Chinese and English, all five views, and the
+  responsive `680 x 520` layout were checked in the running Windows app.
+- Language and appearance changes leave Codex provider configuration, official
+  authentication, credentials, sessions, and backups untouched.
+
 ## [1.2.0] - 2026-07-25
 
 ### Added

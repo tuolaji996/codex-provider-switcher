@@ -56,6 +56,8 @@ public sealed class SwitcherSettings
 {
     public string UiLanguage { get; set; } = Localizer.ChineseCode;
 
+    public string UiTheme { get; set; } = ThemePreference.LightCode;
+
     public string OfficialModel { get; set; } = AppPaths.DefaultOfficialModel;
 
     public string? OfficialReviewModel { get; set; } = "gpt-5.5";

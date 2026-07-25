@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = "1.2.0",
+    [string]$Version = "1.3.0",
     [string]$DotNet = "dotnet"
 )
 
@@ -33,11 +33,24 @@ if (Test-Path -LiteralPath $releaseRoot) {
 }
 
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
-Copy-Item -Path (Join-Path $publish "*") -Destination $stage -Force
-Copy-Item -LiteralPath (Join-Path $root "install.ps1") -Destination $stage
-Copy-Item -LiteralPath (Join-Path $root "README.md") -Destination $stage
-Copy-Item -LiteralPath (Join-Path $root "CHANGELOG.md") -Destination $stage
-Copy-Item -LiteralPath (Join-Path $root "LICENSE") -Destination $stage
+Copy-Item `
+    -Path (Join-Path $publish "*") `
+    -Destination $stage `
+    -Recurse `
+    -Force
+
+foreach ($requiredFile in @(
+    "CodexProviderSwitcher.exe",
+    "CodexProviderToken.exe",
+    "install.ps1",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $stage $requiredFile))) {
+        throw "Release package is missing $requiredFile."
+    }
+}
 
 Compress-Archive -LiteralPath $stage -DestinationPath $archive -CompressionLevel Optimal
 $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()

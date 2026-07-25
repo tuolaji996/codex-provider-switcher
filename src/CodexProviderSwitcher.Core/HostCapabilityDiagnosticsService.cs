@@ -210,6 +210,25 @@ public sealed partial class HostCapabilityDiagnosticsService
         }
     }
 
+    public static bool OpenOfficialCodexApp()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"shell:AppsFolder\\{AppPaths.CodexAppId}",
+                UseShellExecute = true
+            });
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is Win32Exception or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     private static string? ResolveExecutablePath(string? configuredPath)
     {
         if (string.IsNullOrWhiteSpace(configuredPath))

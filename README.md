@@ -15,7 +15,7 @@ product.
 
 ## Install
 
-1. Download `CodexProviderSwitcher-v1.2.0-win-x64.zip` from the latest GitHub
+1. Download `CodexProviderSwitcher-v1.3.0-win-x64.zip` from the latest GitHub
    Release.
 2. Extract the archive.
 3. Run `install.ps1` from PowerShell.
@@ -24,8 +24,23 @@ product.
 Windows 10 or 11 and the .NET 8 Windows Desktop Runtime are required. The
 release is currently unsigned, so Windows SmartScreen may ask for confirmation.
 
-Use the `CHN / ENG` selector in the window header to change the complete
-interface language. The selection is remembered for the next launch.
+Use **Settings** to switch the complete interface between Chinese and English,
+and to select Light, Dark, or System appearance. Both choices are remembered.
+
+## Interface
+
+Version 1.3 uses a compact native Windows workspace:
+
+- **Home:** current route, shared-history health, and quick switching.
+- **Providers:** official OpenAI and third-party endpoint, model, and key
+  management.
+- **Diagnostics:** official host, plugin tool protocol, image generation, and
+  Mobile Remote prerequisites.
+- **Backups:** a read-only table of every timestamped `config.toml` backup.
+- **Settings:** language, appearance, restart behavior, and local data access.
+
+The navigation pane collapses to icons at narrow window sizes. All operational
+status remains visible in the bottom status bar.
 
 ## Safety model
 
@@ -56,9 +71,9 @@ provider:
   PNG, JPEG, or WebP file has been decoded and saved under
   `%LOCALAPPDATA%\CodexProviderSwitcher\Diagnostics`. The probe mirrors the
   current Codex request with `gpt-image-2` and automatic image settings.
-- **Mobile Remote:** opens the official Codex Connections page. Complete the QR
-  pairing in the ChatGPT desktop and mobile apps with the same account and
-  workspace.
+- **Mobile Remote:** opens the official Codex app. Initial phone pairing starts
+  from **Set up Remote** in the official sidebar when that account and workspace
+  expose the entry.
 
 Successful tool and image checks are remembered for the exact endpoint and
 model that passed. Changing either value returns the corresponding status to
@@ -83,7 +98,8 @@ OpenAI references:
 - Plugins are not a native mobile surface. Mobile Remote uses the connected
   host's plugins, credentials, permissions, and local tools.
 - The switcher can preserve and inspect the prerequisites for Remote, but the
-  official desktop/mobile QR pairing cannot be completed by this utility.
+  official desktop/mobile pairing cannot be completed or proven by this
+  utility.
 - If automatic restart is enabled, switching briefly interrupts active Remote
   sessions while the official desktop app restarts. The utility does not sign
   out or delete device pairings.
@@ -107,7 +123,7 @@ already included on the target machine. A .NET 8 SDK is needed only to build.
 To create the versioned ZIP and SHA-256 file used by GitHub Releases:
 
 ```powershell
-.\release.ps1 -Version 1.2.0 -DotNet "C:\path\to\dotnet.exe"
+.\release.ps1 -Version 1.3.0 -DotNet "C:\path\to\dotnet.exe"
 ```
 
 The installed files are placed in:

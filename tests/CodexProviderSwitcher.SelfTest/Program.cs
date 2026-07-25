@@ -24,6 +24,21 @@ Check(
 Check(
     Localizer.NormalizeCode("unsupported") == Localizer.ChineseCode,
     "An unsupported language did not fall back to Chinese.");
+Check(
+    ThemePreference.NormalizeCode(null) == ThemePreference.LightCode,
+    "A missing theme did not default to light.");
+Check(
+    ThemePreference.NormalizeCode(" LIGHT ") == ThemePreference.LightCode,
+    "The light theme code was not normalized.");
+Check(
+    ThemePreference.NormalizeCode("dark") == ThemePreference.DarkCode,
+    "The dark theme code was not normalized.");
+Check(
+    ThemePreference.NormalizeCode("SYSTEM") == ThemePreference.SystemCode,
+    "The system theme code was not normalized.");
+Check(
+    ThemePreference.NormalizeCode("unsupported") == ThemePreference.LightCode,
+    "An unsupported theme did not fall back to light.");
 
 Localizer.Use(AppLanguage.English);
 Check(
@@ -38,12 +53,23 @@ Check(
     "English SSE diagnostics were not localized.");
 
 var languageSettingsJson = JsonSerializer.Serialize(
-    new SwitcherSettings { UiLanguage = Localizer.EnglishCode });
+    new SwitcherSettings
+    {
+        UiLanguage = Localizer.EnglishCode,
+        UiTheme = ThemePreference.DarkCode
+    });
 var reloadedLanguageSettings =
     JsonSerializer.Deserialize<SwitcherSettings>(languageSettingsJson);
 Check(
     reloadedLanguageSettings?.UiLanguage == Localizer.EnglishCode,
     "The selected language did not survive a settings JSON round trip.");
+Check(
+    reloadedLanguageSettings?.UiTheme == ThemePreference.DarkCode,
+    "The selected theme did not survive a settings JSON round trip.");
+var legacySettings = JsonSerializer.Deserialize<SwitcherSettings>("{}");
+Check(
+    legacySettings?.UiTheme == ThemePreference.LightCode,
+    "Legacy settings without a theme did not default to light.");
 
 Localizer.Use(AppLanguage.Chinese);
 Check(
@@ -52,6 +78,146 @@ Check(
 Check(
     new SwitcherSettings().UiLanguage == Localizer.ChineseCode,
     "New settings did not default to Chinese.");
+Check(
+    new SwitcherSettings().UiTheme == ThemePreference.LightCode,
+    "New settings did not default to the light theme.");
+
+var settingsStoreRoot = Path.Combine(
+    Path.GetTempPath(),
+    $"codex-provider-switcher-settings-test-{Guid.NewGuid():N}");
+var settingsStorePath = Path.Combine(settingsStoreRoot, "settings.json");
+Directory.CreateDirectory(settingsStoreRoot);
+try
+{
+    var settingsFixture = new SwitcherSettings
+    {
+        UiLanguage = Localizer.EnglishCode,
+        UiTheme = "invalid",
+        OfficialModel = "official-preserved",
+        OfficialReviewModel = "review-preserved",
+        ThirdPartyBaseUrl = "https://original.example/v1",
+        ThirdPartyModel = "third-preserved",
+        RestartAfterSwitch = false,
+        LastSuccessfulCompatibilityTestUtc =
+            DateTimeOffset.Parse("2026-07-25T01:00:00Z"),
+        LastTestedEndpointFingerprint = "compatibility-fingerprint",
+        LastSuccessfulToolTestUtc =
+            DateTimeOffset.Parse("2026-07-25T02:00:00Z"),
+        LastToolTestedEndpointFingerprint = "tool-fingerprint",
+        LastSuccessfulImageTestUtc =
+            DateTimeOffset.Parse("2026-07-25T03:00:00Z"),
+        LastImageTestedEndpointFingerprint = "image-fingerprint",
+        LastGeneratedImagePath = @"C:\diagnostics\image.png"
+    };
+    File.WriteAllText(
+        settingsStorePath,
+        JsonSerializer.Serialize(settingsFixture));
+    var testSettingsStore = new SettingsStore(settingsStorePath);
+    var loadedThirdPartySettings = testSettingsStore.Load(
+        new ConfigStatus(
+            ProviderMode.ThirdParty,
+            AppPaths.StableProviderId,
+            "third-current",
+            "third-current",
+            "https://updated.example/v1",
+            false));
+
+    Check(
+        loadedThirdPartySettings.UiTheme == ThemePreference.LightCode,
+        "SettingsStore did not normalize an invalid theme.");
+    Check(
+        loadedThirdPartySettings.OfficialModel == "official-preserved" &&
+        loadedThirdPartySettings.OfficialReviewModel == "review-preserved",
+        "Loading third-party status changed official settings.");
+    Check(
+        loadedThirdPartySettings.ThirdPartyBaseUrl ==
+        "https://updated.example/v1" &&
+        loadedThirdPartySettings.ThirdPartyModel == "third-current",
+        "Loading third-party status did not update its route settings.");
+    Check(
+        !loadedThirdPartySettings.RestartAfterSwitch &&
+        loadedThirdPartySettings.LastTestedEndpointFingerprint ==
+        "compatibility-fingerprint" &&
+        loadedThirdPartySettings.LastToolTestedEndpointFingerprint ==
+        "tool-fingerprint" &&
+        loadedThirdPartySettings.LastImageTestedEndpointFingerprint ==
+        "image-fingerprint" &&
+        loadedThirdPartySettings.LastGeneratedImagePath ==
+        @"C:\diagnostics\image.png",
+        "Loading settings discarded unrelated preferences or diagnostics.");
+
+    var persistedNormalizedSettings =
+        JsonSerializer.Deserialize<SwitcherSettings>(
+            File.ReadAllText(settingsStorePath));
+    Check(
+        persistedNormalizedSettings?.UiTheme == ThemePreference.LightCode,
+        "The normalized theme was not persisted.");
+
+    var loadedOfficialSettings = testSettingsStore.Load(
+        new ConfigStatus(
+            ProviderMode.Official,
+            AppPaths.StableProviderId,
+            "official-current",
+            "review-current",
+            null,
+            true));
+    Check(
+        loadedOfficialSettings.OfficialModel == "official-current" &&
+        loadedOfficialSettings.OfficialReviewModel == "review-current",
+        "Loading official status did not update official settings.");
+    Check(
+        loadedOfficialSettings.ThirdPartyBaseUrl ==
+        "https://updated.example/v1" &&
+        loadedOfficialSettings.ThirdPartyModel == "third-current",
+        "Loading official status changed third-party settings.");
+}
+finally
+{
+    Directory.Delete(settingsStoreRoot, true);
+}
+
+var backupCatalogRoot = Path.Combine(
+    Path.GetTempPath(),
+    $"codex-provider-switcher-backup-test-{Guid.NewGuid():N}");
+Directory.CreateDirectory(backupCatalogRoot);
+try
+{
+    var olderBackupFolder = Path.Combine(
+        backupCatalogRoot,
+        "20260724-235959-001");
+    var newerBackupFolder = Path.Combine(
+        backupCatalogRoot,
+        "20260725-010203-004");
+    Directory.CreateDirectory(olderBackupFolder);
+    Directory.CreateDirectory(newerBackupFolder);
+    var olderBackupPath = Path.Combine(olderBackupFolder, "config.toml");
+    var newerBackupPath = Path.Combine(newerBackupFolder, "config.toml");
+    File.WriteAllText(olderBackupPath, "old");
+    File.WriteAllText(newerBackupPath, "newer");
+    File.SetLastWriteTime(
+        newerBackupPath,
+        new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Local));
+
+    var backups = new BackupCatalogService(backupCatalogRoot).List();
+    Check(backups.Count == 2, "The backup catalog did not list every backup.");
+    Check(
+        backups[0].FolderName == "20260725-010203-004",
+        "Backup ordering did not use the timestamp folder.");
+    Check(
+        backups[0].Timestamp ==
+        new DateTime(2026, 7, 25, 1, 2, 3, 4, DateTimeKind.Local),
+        "The timestamp folder was not parsed correctly.");
+    Check(
+        backups[0].SizeBytes == 5,
+        "The backup catalog reported the wrong file size.");
+    Check(
+        BackupCatalogService.ParseTimestamp("not-a-backup") is null,
+        "An invalid backup folder was parsed as a timestamp.");
+}
+finally
+{
+    Directory.Delete(backupCatalogRoot, true);
+}
 
 bool HasRunnableDefaultWsl()
 {

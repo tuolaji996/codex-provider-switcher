@@ -1,16 +1,36 @@
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using CodexProviderSwitcher.Core;
+using Microsoft.Win32;
 
 namespace CodexProviderSwitcher;
 
 public partial class MainWindow : Window
 {
+    private enum AppPage
+    {
+        Home,
+        Providers,
+        Diagnostics,
+        Backups,
+        Settings
+    }
+
+    private sealed record BackupRow(
+        DateTime Timestamp,
+        string DisplayTime,
+        long SizeBytes,
+        string DisplaySize,
+        string FolderName,
+        string ConfigPath);
+
     private readonly ConfigService _configService = new();
+    private readonly BackupCatalogService _backupCatalogService = new();
     private readonly SettingsStore _settingsStore = new();
     private readonly SessionHealthService _sessionHealthService = new();
     private readonly ConnectionTestService _connectionTestService = new();
@@ -19,11 +39,17 @@ public partial class MainWindow : Window
     private SwitcherSettings _settings = new();
     private bool _isBusy;
     private bool _isInitialized;
+    private bool _systemThemeEventsSubscribed;
+    private AppPage _currentPage = AppPage.Home;
+    private HostCapabilityDiagnostics? _lastHostDiagnostics;
+    private ConfigStatus? _lastConfigStatus;
 
     public MainWindow()
     {
         InitializeComponent();
         Loaded += MainWindow_Loaded;
+        SizeChanged += MainWindow_SizeChanged;
+        Closed += MainWindow_Closed;
     }
 
     private string TokenBrokerPath =>
@@ -36,17 +62,29 @@ public partial class MainWindow : Window
             var status = _configService.ReadStatus();
             _settings = _settingsStore.Load(status);
             Localizer.Use(_settings.UiLanguage);
+            ThemeManager.Apply(_settings.UiTheme);
             ApplyLanguage();
+            UpdateVersionText();
             BaseUrlTextBox.Text = _settings.ThirdPartyBaseUrl;
             ModelTextBox.Text = _settings.ThirdPartyModel;
             RestartCheckBox.IsChecked = _settings.RestartAfterSwitch;
             OpenGeneratedImageButton.IsEnabled = HasGeneratedImage();
             UpdatePersistedProviderCapabilityStatuses();
+            RefreshBackups();
             await RefreshStatusAsync();
             await RefreshCapabilitiesAsync();
             _isInitialized = true;
             ChineseLanguageButton.IsEnabled = true;
             EnglishLanguageButton.IsEnabled = true;
+            LightThemeButton.IsEnabled = true;
+            DarkThemeButton.IsEnabled = true;
+            SystemThemeButton.IsEnabled = true;
+            UpdateThemeButtons();
+            HomeNavigationButton.IsChecked = true;
+            NavigateTo(AppPage.Home);
+            SubscribeToSystemThemeEvents();
+            UpdateResponsiveLayout();
+            OperationStatusText.Text = T("就绪", "Ready");
             MainScrollViewer.ScrollToTop();
             Keyboard.ClearFocus();
             Focus();
@@ -56,6 +94,191 @@ public partial class MainWindow : Window
             ShowFailure(T("初始化失败", "Initialization failed"), exception);
         }
     }
+
+    private void MainWindow_SizeChanged(object sender, SizeChangedEventArgs e) =>
+        UpdateResponsiveLayout();
+
+    private void MainWindow_Closed(object? sender, EventArgs e)
+    {
+        if (!_systemThemeEventsSubscribed)
+        {
+            return;
+        }
+
+        SystemEvents.UserPreferenceChanged -= SystemEvents_UserPreferenceChanged;
+        _systemThemeEventsSubscribed = false;
+    }
+
+    private void SubscribeToSystemThemeEvents()
+    {
+        if (_systemThemeEventsSubscribed)
+        {
+            return;
+        }
+
+        SystemEvents.UserPreferenceChanged += SystemEvents_UserPreferenceChanged;
+        _systemThemeEventsSubscribed = true;
+    }
+
+    private void SystemEvents_UserPreferenceChanged(
+        object sender,
+        UserPreferenceChangedEventArgs e)
+    {
+        if (ThemePreference.Parse(_settings.UiTheme) != UiThemePreference.System)
+        {
+            return;
+        }
+
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (!IsLoaded ||
+                Dispatcher.HasShutdownStarted ||
+                Dispatcher.HasShutdownFinished)
+            {
+                return;
+            }
+
+            try
+            {
+                ThemeManager.Apply(_settings.UiTheme);
+                if (_lastConfigStatus is { } status)
+                {
+                    UpdateModeBadge(status);
+                }
+                UpdatePersistedProviderCapabilityStatuses();
+                UpdateHostStatusDots();
+            }
+            catch (Exception exception)
+            {
+                OperationStatusText.Text = F(
+                    "无法应用 Windows 外观变化：{0}",
+                    "Could not apply the Windows appearance change: {0}",
+                    exception.Message);
+            }
+        });
+    }
+
+    private void NavigationButton_Checked(object sender, RoutedEventArgs e)
+    {
+        if (!_isInitialized || sender is not RadioButton button)
+        {
+            return;
+        }
+
+        var page = ReferenceEquals(button, HomeNavigationButton)
+            ? AppPage.Home
+            : ReferenceEquals(button, ProvidersNavigationButton)
+                ? AppPage.Providers
+                : ReferenceEquals(button, DiagnosticsNavigationButton)
+                    ? AppPage.Diagnostics
+                    : ReferenceEquals(button, BackupsNavigationButton)
+                        ? AppPage.Backups
+                        : AppPage.Settings;
+        NavigateTo(page);
+    }
+
+    private void NavigateTo(AppPage page)
+    {
+        _currentPage = page;
+        MainScrollViewer.Visibility =
+            page == AppPage.Home ? Visibility.Visible : Visibility.Collapsed;
+        ProvidersPageScrollViewer.Visibility =
+            page == AppPage.Providers ? Visibility.Visible : Visibility.Collapsed;
+        DiagnosticsPageScrollViewer.Visibility =
+            page == AppPage.Diagnostics ? Visibility.Visible : Visibility.Collapsed;
+        BackupsPage.Visibility =
+            page == AppPage.Backups ? Visibility.Visible : Visibility.Collapsed;
+        SettingsPageScrollViewer.Visibility =
+            page == AppPage.Settings ? Visibility.Visible : Visibility.Collapsed;
+
+        switch (page)
+        {
+            case AppPage.Home:
+                MainScrollViewer.ScrollToTop();
+                break;
+            case AppPage.Providers:
+                ProvidersPageScrollViewer.ScrollToTop();
+                break;
+            case AppPage.Diagnostics:
+                DiagnosticsPageScrollViewer.ScrollToTop();
+                break;
+            case AppPage.Backups:
+                RefreshBackups();
+                break;
+            case AppPage.Settings:
+                SettingsPageScrollViewer.ScrollToTop();
+                break;
+        }
+
+        UpdatePageTitle();
+    }
+
+    private void UpdatePageTitle()
+    {
+        PageTitleText.Text = _currentPage switch
+        {
+            AppPage.Home => T("首页", "Home"),
+            AppPage.Providers => T("供应商", "Providers"),
+            AppPage.Diagnostics => T("能力诊断", "Diagnostics"),
+            AppPage.Backups => T("备份记录", "Backups"),
+            _ => T("设置", "Settings")
+        };
+    }
+
+    private void UpdateResponsiveLayout()
+    {
+        if (!IsLoaded)
+        {
+            return;
+        }
+
+        var compact = ActualWidth < 820;
+        NavigationColumn.Width = new GridLength(compact ? 68 : 210);
+        NavigationBrandText.Visibility =
+            compact ? Visibility.Collapsed : Visibility.Visible;
+        NavStatusText.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        VersionText.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+
+        foreach (var label in new[]
+                 {
+                     HomeNavigationText,
+                     ProvidersNavigationText,
+                     DiagnosticsNavigationText,
+                     BackupsNavigationText,
+                     SettingsNavigationText
+                 })
+        {
+            label.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        }
+    }
+
+    private async void HeaderRefreshButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunBusyAsync(async () =>
+        {
+            await RefreshStatusAsync();
+            await RefreshCapabilitiesAsync();
+            RefreshBackups();
+            OperationStatusText.Text = T("状态已刷新。", "Status refreshed.");
+        });
+    }
+
+    private void HomeOpenProvidersButton_Click(object sender, RoutedEventArgs e) =>
+        ProvidersNavigationButton.IsChecked = true;
+
+    private void HomeOpenDiagnosticsButton_Click(object sender, RoutedEventArgs e) =>
+        DiagnosticsNavigationButton.IsChecked = true;
+
+    private void HomeSwitchOfficialButton_Click(object sender, RoutedEventArgs e) =>
+        SwitchOfficialButton_Click(sender, e);
+
+    private void HomeSwitchThirdPartyButton_Click(object sender, RoutedEventArgs e) =>
+        SwitchThirdPartyButton_Click(sender, e);
 
     private async Task RefreshStatusAsync()
     {
@@ -156,12 +379,83 @@ public partial class MainWindow : Window
             Localizer.Use(language);
             ApplyLanguage();
             UpdatePersistedProviderCapabilityStatuses();
+            RefreshBackups();
             await RefreshStatusAsync();
             await RefreshCapabilitiesAsync();
             OperationStatusText.Text = T(
                 "界面语言已切换为中文。",
                 "Interface language switched to English.");
         });
+    }
+
+    private async void LightThemeButton_Checked(object sender, RoutedEventArgs e)
+    {
+        await ChangeThemeAsync(UiThemePreference.Light);
+    }
+
+    private async void DarkThemeButton_Checked(object sender, RoutedEventArgs e)
+    {
+        await ChangeThemeAsync(UiThemePreference.Dark);
+    }
+
+    private async void SystemThemeButton_Checked(object sender, RoutedEventArgs e)
+    {
+        await ChangeThemeAsync(UiThemePreference.System);
+    }
+
+    private async Task ChangeThemeAsync(UiThemePreference preference)
+    {
+        if (!_isInitialized ||
+            _isBusy ||
+            ThemePreference.Parse(_settings.UiTheme) == preference)
+        {
+            UpdateThemeButtons();
+            return;
+        }
+
+        await RunBusyAsync(() =>
+        {
+            var previousThemeCode = _settings.UiTheme;
+            _settings.UiTheme = ThemePreference.ToCode(preference);
+            try
+            {
+                _settingsStore.Save(_settings);
+                ThemeManager.Apply(_settings.UiTheme);
+            }
+            catch
+            {
+                _settings.UiTheme = previousThemeCode;
+                ThemeManager.Apply(previousThemeCode);
+                UpdateThemeButtons();
+                throw;
+            }
+
+            UpdateThemeButtons();
+            if (_lastConfigStatus is { } status)
+            {
+                UpdateModeBadge(status);
+            }
+            UpdatePersistedProviderCapabilityStatuses();
+            UpdateHostStatusDots();
+            OperationStatusText.Text = preference switch
+            {
+                UiThemePreference.Dark =>
+                    T("已切换到深色外观。", "Dark appearance selected."),
+                UiThemePreference.System =>
+                    T("外观现在跟随 Windows。", "Appearance now follows Windows."),
+                _ =>
+                    T("已切换到浅色外观。", "Light appearance selected.")
+            };
+            return Task.CompletedTask;
+        });
+    }
+
+    private void UpdateThemeButtons()
+    {
+        var preference = ThemePreference.Parse(_settings.UiTheme);
+        LightThemeButton.IsChecked = preference == UiThemePreference.Light;
+        DarkThemeButton.IsChecked = preference == UiThemePreference.Dark;
+        SystemThemeButton.IsChecked = preference == UiThemePreference.System;
     }
 
     private async void SaveKeyButton_Click(object sender, RoutedEventArgs e)
@@ -216,7 +510,17 @@ public partial class MainWindow : Window
         {
             SaveNonSecretSettings();
             var key = ResolveAndOptionallySaveKey();
-            var result = await TestConnectionAsync(key);
+            ConnectionTestResult result;
+            try
+            {
+                result = await TestConnectionAsync(key);
+            }
+            catch
+            {
+                ClearCurrentCompatibilityTestResult();
+                _settingsStore.Save(_settings);
+                throw;
+            }
             OperationStatusText.Text = result.Summary;
 
             if (result.Success)
@@ -226,8 +530,12 @@ public partial class MainWindow : Window
                     ConnectionTestService.EndpointFingerprint(
                         _settings.ThirdPartyBaseUrl,
                         _settings.ThirdPartyModel);
-                _settingsStore.Save(_settings);
             }
+            else
+            {
+                ClearCurrentCompatibilityTestResult();
+            }
+            _settingsStore.Save(_settings);
 
             MessageBox.Show(
                 this,
@@ -255,6 +563,7 @@ public partial class MainWindow : Window
                 T(
                     "第三方插件工具调用：正在测试 function_call 与工具结果回传…",
                     "Third-party plugin tools: testing function_call and tool-result replay...");
+            ToolStatusDot.Background = ResourceBrush("WarningBrush");
 
             ConnectionTestResult result;
             try
@@ -288,6 +597,7 @@ public partial class MainWindow : Window
                 ClearCurrentToolTestResult();
             }
             _settingsStore.Save(_settings);
+            UpdatePersistedProviderCapabilityStatuses();
 
             MessageBox.Show(
                 this,
@@ -324,6 +634,7 @@ public partial class MainWindow : Window
                 T(
                     "第三方图片生成：正在实测 Codex 当前使用的 Images API…",
                     "Third-party image generation: testing the Images API currently used by Codex...");
+            ImageStatusDot.Background = ResourceBrush("WarningBrush");
 
             ImageGenerationTestResult result;
             try
@@ -359,6 +670,7 @@ public partial class MainWindow : Window
                 ClearCurrentImageTestResult();
             }
             _settingsStore.Save(_settings);
+            UpdatePersistedProviderCapabilityStatuses();
 
             MessageBox.Show(
                 this,
@@ -400,14 +712,14 @@ public partial class MainWindow : Window
 
     private void OpenRemoteSettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!HostCapabilityDiagnosticsService.OpenOfficialConnectionsSettings())
+        if (!HostCapabilityDiagnosticsService.OpenOfficialCodexApp())
         {
             MessageBox.Show(
                 this,
                 T(
-                    "无法打开 Codex Connections。请先确认官方 Codex Windows 应用已安装。",
-                    "Could not open Codex Connections. Confirm that the official Codex Windows app is installed."),
-                T("无法打开 Remote 设置", "Could not open Remote settings"),
+                    "无法打开官方 Codex Windows 应用，请先确认它已安装。",
+                    "Could not open the official Codex Windows app. Confirm that it is installed."),
+                T("无法打开 Codex", "Could not open Codex"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
             return;
@@ -415,8 +727,8 @@ public partial class MainWindow : Window
 
         OperationStatusText.Text =
             T(
-                "已打开官方 Connections 页面；请使用同一 ChatGPT 账号在手机端完成配对。",
-                "Opened the official Connections page. Complete pairing on your phone with the same ChatGPT account.");
+                "已请求打开官方 Codex。首次手机配对需从侧栏的“Set up Remote”开始（若账号已开放该入口）。",
+                "Requested official Codex to open. Initial phone pairing starts from “Set up Remote” in the sidebar when the account exposes it.");
     }
 
     private async void SwitchThirdPartyButton_Click(object sender, RoutedEventArgs e)
@@ -440,9 +752,21 @@ public partial class MainWindow : Window
                 OperationStatusText.Text = T(
                     "正在验证第三方 Responses API…",
                     "Validating the third-party Responses API...");
-                var result = await TestConnectionAsync(key);
+                ConnectionTestResult result;
+                try
+                {
+                    result = await TestConnectionAsync(key);
+                }
+                catch
+                {
+                    ClearCurrentCompatibilityTestResult();
+                    _settingsStore.Save(_settings);
+                    throw;
+                }
                 if (!result.Success)
                 {
+                    ClearCurrentCompatibilityTestResult();
+                    _settingsStore.Save(_settings);
                     var answer = MessageBox.Show(
                         this,
                         F(
@@ -508,6 +832,7 @@ public partial class MainWindow : Window
                     AppPaths.StableProviderId,
                     backupFolder);
             await RefreshStatusAsync();
+            RefreshBackups();
             await RestartIfRequestedAsync();
         });
     }
@@ -541,6 +866,7 @@ public partial class MainWindow : Window
                     "Switched to official OpenAI; official sign-in credentials were preserved. Backup: {0}",
                     backupFolder);
             await RefreshStatusAsync();
+            RefreshBackups();
             await RestartIfRequestedAsync();
         });
     }
@@ -558,10 +884,117 @@ public partial class MainWindow : Window
 
     private void OpenBackupsButton_Click(object sender, RoutedEventArgs e)
     {
+        BackupsNavigationButton.IsChecked = true;
+    }
+
+    private void RefreshBackupsButton_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshBackups();
+        OperationStatusText.Text = T("备份列表已刷新。", "Backup list refreshed.");
+    }
+
+    private void OpenBackupFolderButton_Click(object sender, RoutedEventArgs e)
+    {
+        OpenFolder(AppPaths.BackupsRoot);
+    }
+
+    private void OpenSelectedBackupButton_Click(object sender, RoutedEventArgs e)
+    {
+        OpenSelectedBackup();
+    }
+
+    private void BackupsDataGrid_MouseDoubleClick(
+        object sender,
+        MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is DependencyObject source &&
+            ItemsControl.ContainerFromElement(BackupsDataGrid, source) is DataGridRow)
+        {
+            OpenSelectedBackup();
+        }
+    }
+
+    private void BackupsDataGrid_SelectionChanged(
+        object sender,
+        SelectionChangedEventArgs e)
+    {
+        OpenSelectedBackupButton.IsEnabled =
+            !_isBusy && BackupsDataGrid.SelectedItem is BackupRow;
+    }
+
+    private void OpenSelectedBackup()
+    {
+        if (BackupsDataGrid.SelectedItem is not BackupRow backup)
+        {
+            return;
+        }
+
+        var folder = Path.GetDirectoryName(backup.ConfigPath);
+        if (!string.IsNullOrWhiteSpace(folder))
+        {
+            OpenFolder(folder);
+        }
+    }
+
+    private void RefreshBackups()
+    {
         Directory.CreateDirectory(AppPaths.BackupsRoot);
+        var rows = _backupCatalogService
+            .List()
+            .Select(entry => new BackupRow(
+                entry.Timestamp,
+                entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"),
+                entry.SizeBytes,
+                FormatFileSize(entry.SizeBytes),
+                entry.FolderName,
+                entry.ConfigPath))
+            .ToList();
+
+        BackupsDataGrid.ItemsSource = rows;
+        BackupsEmptyPanel.Visibility =
+            rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        BackupCountText.Text = F(
+            "{0} 个备份",
+            "{0} backups",
+            rows.Count);
+        OpenSelectedBackupButton.IsEnabled = false;
+    }
+
+    private static string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024)
+        {
+            return $"{bytes} B";
+        }
+
+        if (bytes < 1024 * 1024)
+        {
+            return $"{bytes / 1024d:0.0} KB";
+        }
+
+        return $"{bytes / (1024d * 1024d):0.0} MB";
+    }
+
+    private void OpenDataFolderButton_Click(object sender, RoutedEventArgs e)
+    {
+        OpenFolder(AppPaths.LocalDataRoot);
+    }
+
+    private void OpenGitHubButton_Click(object sender, RoutedEventArgs e)
+    {
         Process.Start(new ProcessStartInfo
         {
-            FileName = AppPaths.BackupsRoot,
+            FileName = "https://github.com/tuolaji996/codex-provider-switcher",
+            UseShellExecute = true
+        });
+    }
+
+    private static void OpenFolder(string path)
+    {
+        Directory.CreateDirectory(path);
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = path,
             UseShellExecute = true
         });
     }
@@ -625,10 +1058,13 @@ public partial class MainWindow : Window
 
     private async Task RefreshCapabilitiesAsync()
     {
+        HostStatusDot.Background = ResourceBrush("NeutralStatusBrush");
+        RemoteStatusDot.Background = ResourceBrush("NeutralStatusBrush");
         HostCapabilityStatusText.Text = T(
             "官方登录与功能开关：正在检测…",
             "Official sign-in and feature flags: checking...");
         var diagnostics = await _hostDiagnosticsService.InspectAsync();
+        _lastHostDiagnostics = diagnostics;
         HostCapabilityStatusText.Text = F(
             "官方宿主：{0}",
             "Official host: {0}",
@@ -646,13 +1082,43 @@ public partial class MainWindow : Window
                     "Mobile Remote: the local remote_plugin feature flag is disabled."),
             true when diagnostics.Features.RemotePluginEnabled == true =>
                 T(
-                    "手机 Remote：本机登录与功能开关已就绪；仍需在官方 Connections 页面用手机实机配对。",
-                    "Mobile Remote: local sign-in and feature flags are ready; physical phone pairing is still required in the official Connections page."),
+                    "手机 Remote：本机登录与功能开关已就绪；仍需从官方 Codex 的“Set up Remote”入口完成手机实机配对。",
+                    "Mobile Remote: local sign-in and feature flags are ready; physical phone pairing must still be completed from “Set up Remote” in official Codex."),
             _ =>
                 T(
-                    "手机 Remote：本机状态未完整识别；可打开官方 Connections 页面继续检查。",
-                    "Mobile Remote: local state was not fully detected; open the official Connections page to continue checking.")
+                    "手机 Remote：本机状态未完整识别；可打开官方 Codex 检查是否显示“Set up Remote”。",
+                    "Mobile Remote: local state was not fully detected; open official Codex and check for “Set up Remote”.")
         };
+        UpdateHostStatusDots();
+    }
+
+    private void UpdateHostStatusDots()
+    {
+        if (_lastHostDiagnostics is not { } diagnostics)
+        {
+            HostStatusDot.Background = ResourceBrush("NeutralStatusBrush");
+            RemoteStatusDot.Background = ResourceBrush("NeutralStatusBrush");
+            return;
+        }
+
+        var coreHostReady =
+            diagnostics.ChatGptLoggedIn == true &&
+            diagnostics.Features.AppsEnabled == true &&
+            diagnostics.Features.PluginsEnabled == true &&
+            diagnostics.Features.ImageGenerationEnabled == true;
+        HostStatusDot.Background = coreHostReady
+            ? ResourceBrush("ThirdPartyStatusBrush")
+            : !diagnostics.CliAvailable || diagnostics.ChatGptLoggedIn == false
+                ? ResourceBrush("DangerBrush")
+                : ResourceBrush("WarningBrush");
+        RemoteStatusDot.Background =
+            diagnostics.ChatGptLoggedIn == true &&
+            diagnostics.Features.RemotePluginEnabled == true
+                ? ResourceBrush("WarningBrush")
+                : diagnostics.ChatGptLoggedIn == false ||
+                  diagnostics.Features.RemotePluginEnabled == false
+                    ? ResourceBrush("DangerBrush")
+                    : ResourceBrush("NeutralStatusBrush");
     }
 
     private bool HasGeneratedImage() =>
@@ -660,6 +1126,11 @@ public partial class MainWindow : Window
         File.Exists(_settings.LastGeneratedImagePath);
 
     private string CurrentToolEndpointFingerprint() =>
+        ConnectionTestService.EndpointFingerprint(
+            _settings.ThirdPartyBaseUrl,
+            _settings.ThirdPartyModel);
+
+    private string CurrentCompatibilityEndpointFingerprint() =>
         ConnectionTestService.EndpointFingerprint(
             _settings.ThirdPartyBaseUrl,
             _settings.ThirdPartyModel);
@@ -707,6 +1178,12 @@ public partial class MainWindow : Window
                 : T(
                     "第三方插件工具调用：尚未实测",
                     "Third-party plugin tools: not tested");
+        ToolStatusDot.Background =
+            _settings.LastSuccessfulToolTestUtc is not null &&
+            displayedToolFingerprint is not null &&
+            _settings.LastToolTestedEndpointFingerprint == displayedToolFingerprint
+                ? ResourceBrush("ThirdPartyStatusBrush")
+                : ResourceBrush("NeutralStatusBrush");
 
         ImageCapabilityStatusText.Text =
             _settings.LastSuccessfulImageTestUtc is { } imageTestUtc &&
@@ -721,6 +1198,13 @@ public partial class MainWindow : Window
                 : T(
                     "第三方图片生成：尚未实测",
                     "Third-party image generation: not tested");
+        ImageStatusDot.Background =
+            _settings.LastSuccessfulImageTestUtc is not null &&
+            displayedImageFingerprint is not null &&
+            _settings.LastImageTestedEndpointFingerprint == displayedImageFingerprint &&
+            HasGeneratedImage()
+                ? ResourceBrush("ThirdPartyStatusBrush")
+                : ResourceBrush("NeutralStatusBrush");
     }
 
     private void ClearCurrentToolTestResult()
@@ -730,6 +1214,16 @@ public partial class MainWindow : Window
         {
             _settings.LastSuccessfulToolTestUtc = null;
             _settings.LastToolTestedEndpointFingerprint = null;
+        }
+    }
+
+    private void ClearCurrentCompatibilityTestResult()
+    {
+        if (_settings.LastTestedEndpointFingerprint ==
+            CurrentCompatibilityEndpointFingerprint())
+        {
+            _settings.LastSuccessfulCompatibilityTestUtc = null;
+            _settings.LastTestedEndpointFingerprint = null;
         }
     }
 
@@ -767,19 +1261,26 @@ public partial class MainWindow : Window
 
     private void UpdateModeBadge(ConfigStatus status)
     {
+        _lastConfigStatus = status;
         switch (status.Mode)
         {
             case ProviderMode.Official:
-                ModeBadge.Background = new SolidColorBrush(Color.FromRgb(31, 68, 120));
+                ModeBadge.Background = ResourceBrush("OfficialStatusBrush");
+                ProviderStatusDot.Background = ResourceBrush("OfficialStatusBrush");
                 ModeBadgeText.Text = T("官方 OpenAI", "Official OpenAI");
+                NavStatusText.Text = T("官方线路", "Official");
                 break;
             case ProviderMode.ThirdParty:
-                ModeBadge.Background = new SolidColorBrush(Color.FromRgb(24, 74, 55));
+                ModeBadge.Background = ResourceBrush("ThirdPartyStatusBrush");
+                ProviderStatusDot.Background = ResourceBrush("ThirdPartyStatusBrush");
                 ModeBadgeText.Text = T("第三方线路", "Third-party");
+                NavStatusText.Text = T("第三方线路", "Third-party");
                 break;
             default:
-                ModeBadge.Background = new SolidColorBrush(Color.FromRgb(89, 62, 24));
+                ModeBadge.Background = ResourceBrush("WarningStatusBrush");
+                ProviderStatusDot.Background = ResourceBrush("WarningBrush");
                 ModeBadgeText.Text = T("需要初始化", "Setup required");
+                NavStatusText.Text = T("需要初始化", "Setup required");
                 break;
         }
     }
@@ -819,11 +1320,26 @@ public partial class MainWindow : Window
         OpenRemoteSettingsButton.IsEnabled = !busy;
         SwitchThirdPartyButton.IsEnabled = !busy;
         SwitchOfficialButton.IsEnabled = !busy;
+        HomeSwitchThirdPartyButton.IsEnabled = !busy;
+        HomeSwitchOfficialButton.IsEnabled = !busy;
+        HeaderRefreshButton.IsEnabled = !busy;
         ChineseLanguageButton.IsEnabled = !busy;
         EnglishLanguageButton.IsEnabled = !busy;
+        LightThemeButton.IsEnabled = !busy;
+        DarkThemeButton.IsEnabled = !busy;
+        SystemThemeButton.IsEnabled = !busy;
         BaseUrlTextBox.IsEnabled = !busy;
         ModelTextBox.IsEnabled = !busy;
         ApiKeyPasswordBox.IsEnabled = !busy;
+        RestartCheckBox.IsEnabled = !busy;
+        RefreshBackupsButton.IsEnabled = !busy;
+        OpenBackupFolderButton.IsEnabled = !busy;
+        OpenSelectedBackupButton.IsEnabled =
+            !busy && BackupsDataGrid.SelectedItem is BackupRow;
+        OpenDataFolderButton.IsEnabled = !busy;
+        OpenGitHubButton.IsEnabled = !busy;
+        BusyProgressBar.Visibility =
+            busy ? Visibility.Visible : Visibility.Collapsed;
         Cursor = busy ? System.Windows.Input.Cursors.Wait : null;
     }
 
@@ -840,16 +1356,60 @@ public partial class MainWindow : Window
 
     private void ApplyLanguage()
     {
+        NavigationSubtitleText.Text = T("供应商控制台", "Provider console");
+        HomeNavigationText.Text = T("首页", "Home");
+        ProvidersNavigationText.Text = T("供应商", "Providers");
+        DiagnosticsNavigationText.Text = T("能力诊断", "Diagnostics");
+        BackupsNavigationText.Text = T("备份记录", "Backups");
+        SettingsNavigationText.Text = T("设置", "Settings");
+        HomeNavigationButton.ToolTip = HomeNavigationText.Text;
+        ProvidersNavigationButton.ToolTip = ProvidersNavigationText.Text;
+        DiagnosticsNavigationButton.ToolTip = DiagnosticsNavigationText.Text;
+        BackupsNavigationButton.ToolTip = BackupsNavigationText.Text;
+        SettingsNavigationButton.ToolTip = SettingsNavigationText.Text;
+
+        HeaderRefreshButton.ToolTip = T("刷新状态", "Refresh status");
+        AutomationProperties.SetName(
+            HeaderRefreshButton,
+            T("刷新状态", "Refresh status"));
         TaglineText.Text = T(
-            "官方登录与第三方线路，共用同一份聊天历史",
-            "Official sign-in and third-party routes, with one shared chat history");
+            "官方登录与第三方线路，共用同一份聊天历史。",
+            "Official sign-in and third-party routes share one chat history.");
         ModeBadgeText.Text = T("正在检测", "Checking");
-        CurrentStatusTitleText.Text = T("当前状态", "Current status");
+        CurrentStatusTitleText.Text = T("当前线路", "Current route");
         StableHistoryText.Text = T(
             "固定历史分区：OpenAI（切换时永远不改）",
             "Stable history partition: OpenAI (never changed when switching)");
-        OpenBackupsButton.Content = T("打开备份", "Open backups");
+        HomeSwitchOfficialButton.Content = T("官方", "Official");
+        HomeSwitchThirdPartyButton.Content = T("第三方", "Third-party");
+        HomeSafetyTitleText.Text = T("本机保护", "Local safeguards");
+        OfficialAuthSafetyTitleText.Text = T(
+            "官方登录保持不变",
+            "Official sign-in stays intact");
+        OfficialAuthSafetyDescriptionText.Text = T(
+            "切换第三方时不会删除或覆盖 ChatGPT 登录。",
+            "Switching to a third party does not delete or overwrite your ChatGPT sign-in.");
+        HistorySafetyTitleText.Text = T(
+            "聊天记录不搬家",
+            "Chat history stays put");
+        HistorySafetyDescriptionText.Text = T(
+            "两条线路都使用稳定的 OpenAI 历史分区。",
+            "Both routes use the stable OpenAI history partition.");
+        BackupSafetyTitleText.Text = T(
+            "每次写入先备份",
+            "Backup before every write");
+        BackupSafetyDescriptionText.Text = T(
+            "config.toml 会在切换前创建带时间戳的副本。",
+            "A timestamped config.toml copy is created before switching.");
+        HomeOpenProvidersButton.Content = T("管理供应商", "Manage providers");
+        HomeOpenDiagnosticsButton.Content = T(
+            "查看能力诊断",
+            "View diagnostics");
+        OpenBackupsButton.Content = T("查看备份", "View backups");
 
+        ProvidersLeadText.Text = T(
+            "选择线路并管理第三方 Responses API。切换不会改变聊天历史分区。",
+            "Choose a route and manage the third-party Responses API. Switching never changes the chat-history partition.");
         ThirdPartyTitleText.Text = T("第三方线路", "Third-party route");
         KeyStorageDescriptionText.Text = T(
             "密钥保存在 Windows 凭据管理器；不会写进 config.toml、源码或日志。",
@@ -857,10 +1417,10 @@ public partial class MainWindow : Window
         ModelLabelText.Text = T("模型", "Model");
         ApiKeyLabelText.Text = T("新 API Key", "New API key");
         SaveKeyButton.Content = T("保存密钥", "Save key");
-        DeleteKeyButton.Content = T("删除", "Delete");
+        DeleteKeyButton.Content = T("删除密钥", "Delete key");
         ThirdPartyPrivacyWarningText.Text = T(
-            "注意：第三方服务会接收你发送给 Codex 的提示词、代码片段和工具上下文。",
-            "Note: the third-party service receives prompts, code snippets, and tool context sent through Codex.");
+            "第三方服务会接收你发送给 Codex 的提示词、代码片段和工具上下文。",
+            "The third-party service receives prompts, code snippets, and tool context sent through Codex.");
         TestConnectionButton.Content = T(
             "测试 Responses 兼容性",
             "Test Responses compatibility");
@@ -870,17 +1430,23 @@ public partial class MainWindow : Window
         CapabilityDescriptionText.Text = T(
             "官方账号能力保留在本机；第三方模型仍需通过 Responses 工具协议与图片接口实测。",
             "Official account capabilities remain local; third-party models still require real Responses tool-protocol and image API tests.");
+        HostDiagnosticTitleText.Text = T("官方宿主", "Official host");
+        ToolDiagnosticTitleText.Text = T("插件工具协议", "Plugin tool protocol");
+        ImageDiagnosticTitleText.Text = T("图片生成", "Image generation");
+        RemoteDiagnosticTitleText.Text = T(
+            "手机 Remote（本机前置条件）",
+            "Mobile Remote (local prerequisites)");
         HostCapabilityStatusText.Text = T(
             "官方登录与功能开关：正在检测…",
             "Official sign-in and feature flags: checking...");
         RemoteCapabilityStatusText.Text = T(
-            "手机 Remote：需使用相同 ChatGPT 账号在官方 Connections 页面扫码配对",
-            "Mobile Remote: pair from the official Connections page with the same ChatGPT account");
+            "首次手机配对需从官方 Codex 侧栏的“Set up Remote”入口开始。",
+            "Initial phone pairing starts from “Set up Remote” in the official Codex sidebar.");
         RefreshCapabilitiesButton.Content = T("刷新官方能力", "Refresh official capabilities");
         TestToolCallingButton.Content = T("测试插件工具调用", "Test plugin tool calling");
         TestImageGenerationButton.Content = T("生成测试图片", "Generate test image");
         OpenGeneratedImageButton.Content = T("打开测试图片", "Open test image");
-        OpenRemoteSettingsButton.Content = T("打开 Remote 设置", "Open Remote settings");
+        OpenRemoteSettingsButton.Content = T("打开官方 Codex", "Open official Codex");
 
         OfficialTitleText.Text = T("官方 OpenAI Codex", "Official OpenAI Codex");
         OfficialDescriptionText.Text = T(
@@ -895,9 +1461,50 @@ public partial class MainWindow : Window
             "重启会中断正在运行的 Codex 任务。配置写入前会自动生成备份。",
             "Restarting interrupts active Codex tasks. A backup is created before the configuration is written.");
 
+        BackupsLeadText.Text = T(
+            "每次切换前创建的 config.toml 备份副本。",
+            "Backup copies of config.toml created before each switch.");
+        RefreshBackupsButton.Content = T("刷新", "Refresh");
+        OpenSelectedBackupButton.Content = T(
+            "打开所选位置",
+            "Open selected location");
+        OpenBackupFolderButton.Content = T(
+            "打开备份文件夹",
+            "Open backup folder");
+        BackupTimeColumn.Header = T("时间", "Time");
+        BackupSizeColumn.Header = T("大小", "Size");
+        BackupFolderColumn.Header = T("备份 ID", "Backup ID");
+        BackupPathColumn.Header = T("文件", "File");
+        BackupsEmptyText.Text = T("还没有备份", "No backups yet");
+
+        SettingsLeadText.Text = T(
+            "界面与切换行为会保存在本机，不会改动聊天记录。",
+            "Appearance and switching preferences are stored locally and do not modify chat history.");
+        LanguageSettingTitleText.Text = T("界面语言", "Interface language");
+        LanguageSettingDescriptionText.Text = T(
+            "选择中文或英文。",
+            "Choose Chinese or English.");
+        ThemeSettingTitleText.Text = T("外观", "Appearance");
+        ThemeSettingDescriptionText.Text = T(
+            "选择浅色、深色或跟随 Windows。",
+            "Choose light, dark, or follow Windows.");
+        LightThemeButton.Content = T("浅色", "Light");
+        DarkThemeButton.Content = T("深色", "Dark");
+        SystemThemeButton.Content = T("系统", "System");
+        AboutTitleText.Text = T("关于", "About");
+        SettingsStorageDescriptionText.Text = T(
+            "设置、诊断和备份保存在本机 LocalAppData。",
+            "Settings, diagnostics, and backups are stored in local AppData.");
+        OpenDataFolderButton.Content = T("打开数据目录", "Open data folder");
+
         ChineseLanguageButton.ToolTip = T("切换到中文", "Switch to Chinese");
         EnglishLanguageButton.ToolTip = T("切换到英文", "Switch to English");
+        LightThemeButton.ToolTip = T("使用浅色外观", "Use light appearance");
+        DarkThemeButton.ToolTip = T("使用深色外观", "Use dark appearance");
+        SystemThemeButton.ToolTip = T("跟随 Windows 外观", "Follow Windows appearance");
         UpdateLanguageButtons();
+        UpdateThemeButtons();
+        UpdatePageTitle();
     }
 
     private void UpdateLanguageButtons()
@@ -906,6 +1513,19 @@ public partial class MainWindow : Window
         ChineseLanguageButton.IsChecked = chineseSelected;
         EnglishLanguageButton.IsChecked = !chineseSelected;
     }
+
+    private void UpdateVersionText()
+    {
+        var version = typeof(MainWindow).Assembly.GetName().Version;
+        var displayVersion = version is null
+            ? "1.3.0"
+            : $"{version.Major}.{version.Minor}.{version.Build}";
+        VersionText.Text = $"v{displayVersion}";
+        SettingsVersionText.Text = $"Codex Provider Switcher v{displayVersion}";
+    }
+
+    private Brush ResourceBrush(string key) =>
+        (Brush)FindResource(key);
 
     private static string T(string chinese, string english) =>
         Localizer.Text(chinese, english);

@@ -4,21 +4,30 @@ namespace CodexProviderSwitcher.Core;
 
 public sealed class SettingsStore
 {
+    private readonly string _settingsPath;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true
     };
 
+    public SettingsStore(string? settingsPath = null)
+    {
+        _settingsPath = settingsPath ?? AppPaths.SettingsPath;
+    }
+
     public SwitcherSettings Load(ConfigStatus currentStatus)
     {
-        Directory.CreateDirectory(AppPaths.LocalDataRoot);
+        Directory.CreateDirectory(
+            Path.GetDirectoryName(_settingsPath) ??
+            throw new InvalidOperationException("The settings path has no parent directory."));
 
         SwitcherSettings settings;
-        if (File.Exists(AppPaths.SettingsPath))
+        if (File.Exists(_settingsPath))
         {
             try
             {
-                var json = File.ReadAllText(AppPaths.SettingsPath);
+                var json = File.ReadAllText(_settingsPath);
                 settings = JsonSerializer.Deserialize<SwitcherSettings>(json, JsonOptions)
                     ?? new SwitcherSettings();
             }
@@ -33,6 +42,7 @@ public sealed class SettingsStore
         }
 
         settings.UiLanguage = Localizer.NormalizeCode(settings.UiLanguage);
+        settings.UiTheme = ThemePreference.NormalizeCode(settings.UiTheme);
 
         if (currentStatus.Mode == ProviderMode.Official)
         {
@@ -62,8 +72,10 @@ public sealed class SettingsStore
 
     public void Save(SwitcherSettings settings)
     {
-        Directory.CreateDirectory(AppPaths.LocalDataRoot);
+        Directory.CreateDirectory(
+            Path.GetDirectoryName(_settingsPath) ??
+            throw new InvalidOperationException("The settings path has no parent directory."));
         var json = JsonSerializer.Serialize(settings, JsonOptions);
-        AtomicFile.WriteAllText(AppPaths.SettingsPath, json);
+        AtomicFile.WriteAllText(_settingsPath, json);
     }
 }
