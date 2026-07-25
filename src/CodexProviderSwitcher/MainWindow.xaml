@@ -1,0 +1,268 @@
+<Window x:Class="CodexProviderSwitcher.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Codex Provider Switcher"
+        Width="880"
+        Height="720"
+        MinWidth="760"
+        MinHeight="650"
+        Background="{StaticResource WindowBrush}"
+        Foreground="{StaticResource TextBrush}"
+        WindowStartupLocation="CenterScreen">
+    <ScrollViewer x:Name="MainScrollViewer"
+                  Background="{StaticResource WindowBrush}"
+                  VerticalScrollBarVisibility="Auto">
+        <Grid Margin="34" Background="{StaticResource WindowBrush}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="0,0,0,24">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Border Width="52"
+                        Height="52"
+                        CornerRadius="14"
+                        Background="#183A2C"
+                        Margin="0,0,16,0">
+                    <Viewbox Margin="12">
+                        <Canvas Width="28" Height="28">
+                            <Path Stroke="{StaticResource AccentBrush}"
+                                  StrokeThickness="3"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  Data="M 3,9 L 21,9 M 16,4 L 21,9 L 16,14 M 25,19 L 7,19 M 12,14 L 7,19 L 12,24" />
+                        </Canvas>
+                    </Viewbox>
+                </Border>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="Codex Provider Switcher"
+                               FontSize="25"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="官方登录与第三方线路，共用同一份聊天历史"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               FontSize="13"
+                               Margin="0,4,0,0" />
+                </StackPanel>
+                <Border x:Name="ModeBadge"
+                        Grid.Column="2"
+                        CornerRadius="16"
+                        Padding="13,7"
+                        Background="#26313E"
+                        VerticalAlignment="Center">
+                    <TextBlock x:Name="ModeBadgeText"
+                               Text="正在检测"
+                               FontWeight="SemiBold"
+                               FontSize="12" />
+                </Border>
+            </Grid>
+
+            <Border Grid.Row="1"
+                    Background="{StaticResource PanelBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="12"
+                    Padding="20"
+                    Margin="0,0,0,16">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="当前状态" FontSize="15" FontWeight="SemiBold" />
+                        <TextBlock x:Name="CurrentRouteText"
+                                   Margin="0,7,0,0"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock x:Name="HistoryStatusText"
+                                   Margin="0,7,0,0"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="固定历史分区：OpenAI（切换时永远不改）"
+                                   Margin="0,7,0,0"
+                                   Foreground="{StaticResource AccentBrush}" />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                            x:Name="OpenBackupsButton"
+                            Content="打开备份"
+                            Style="{StaticResource SecondaryButton}"
+                            Margin="18,0,0,0"
+                            VerticalAlignment="Center"
+                            Click="OpenBackupsButton_Click" />
+                </Grid>
+            </Border>
+
+            <Border Grid.Row="2"
+                    Background="{StaticResource PanelBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="12"
+                    Padding="20"
+                    Margin="0,0,0,16">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,16">
+                        <TextBlock Text="第三方线路" FontSize="17" FontWeight="SemiBold" />
+                        <TextBlock Text="密钥保存在 Windows 凭据管理器；不会写进 config.toml、源码或日志。"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Margin="0,5,0,0"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <TextBlock Grid.Row="1"
+                               Grid.Column="0"
+                               Text="Base URL"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource MutedTextBrush}" />
+                    <TextBox Grid.Row="1"
+                             Grid.Column="1"
+                             x:Name="BaseUrlTextBox"
+                             Margin="0,0,0,11" />
+
+                    <TextBlock Grid.Row="2"
+                               Grid.Column="0"
+                               Text="模型"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource MutedTextBrush}" />
+                    <TextBox Grid.Row="2"
+                             Grid.Column="1"
+                             x:Name="ModelTextBox"
+                             Margin="0,0,0,11" />
+
+                    <TextBlock Grid.Row="3"
+                               Grid.Column="0"
+                               Text="新 API Key"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource MutedTextBrush}" />
+                    <Grid Grid.Row="3" Grid.Column="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <PasswordBox x:Name="ApiKeyPasswordBox" />
+                        <Button Grid.Column="1"
+                                x:Name="SaveKeyButton"
+                                Content="保存密钥"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="10,0,0,0"
+                                Click="SaveKeyButton_Click" />
+                        <Button Grid.Column="2"
+                                x:Name="DeleteKeyButton"
+                                Content="删除"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="8,0,0,0"
+                                Click="DeleteKeyButton_Click" />
+                    </Grid>
+
+                    <Grid Grid.Row="4" Grid.ColumnSpan="2" Margin="0,16,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock x:Name="KeyStatusText"
+                                       Foreground="{StaticResource MutedTextBrush}" />
+                            <TextBlock Text="注意：第三方服务会接收你发送给 Codex 的提示词、代码片段和工具上下文。"
+                                       Foreground="#E9A23B"
+                                       FontSize="12"
+                                       Margin="0,4,16,0"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                        <Button Grid.Column="1"
+                                x:Name="TestConnectionButton"
+                                Content="测试 Responses 兼容性"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="12,0,0,0"
+                                Click="TestConnectionButton_Click" />
+                        <Button Grid.Column="2"
+                                x:Name="SwitchThirdPartyButton"
+                                Content="切换到第三方"
+                                Style="{StaticResource PrimaryButton}"
+                                Margin="10,0,0,0"
+                                Click="SwitchThirdPartyButton_Click" />
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <Border Grid.Row="3"
+                    Background="{StaticResource PanelBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="12"
+                    Padding="20"
+                    Margin="0,0,0,16">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="官方 OpenAI Codex" FontSize="17" FontWeight="SemiBold" />
+                        <TextBlock Text="使用现有 ChatGPT 登录与订阅额度；官方登录凭据不会被删除或覆盖。"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Margin="0,6,20,0"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Button Grid.Column="1"
+                            x:Name="SwitchOfficialButton"
+                            Content="切换到官方"
+                            Style="{StaticResource OfficialButton}"
+                            VerticalAlignment="Center"
+                            Click="SwitchOfficialButton_Click" />
+                </Grid>
+            </Border>
+
+            <Border Grid.Row="4"
+                    Background="#101720"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="10"
+                    Padding="16">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <CheckBox x:Name="RestartCheckBox"
+                              VerticalAlignment="Top"
+                              Margin="0,3,11,0"
+                              Checked="RestartCheckBox_Changed"
+                              Unchecked="RestartCheckBox_Changed" />
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="切换后自动重启 Codex"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="重启会中断正在运行的 Codex 任务。配置写入前会自动生成备份。"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Margin="0,3,0,0"
+                                   TextWrapping="Wrap" />
+                        <TextBlock x:Name="OperationStatusText"
+                                   Foreground="{StaticResource AccentBrush}"
+                                   Margin="0,9,0,0"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </ScrollViewer>
+</Window>

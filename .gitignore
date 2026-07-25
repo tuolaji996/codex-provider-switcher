@@ -1,0 +1,25 @@
+# Build output
+artifacts/
+**/bin/
+**/obj/
+
+# IDE state
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+
+# Local secrets and signing material
+*.pfx
+*.p12
+*.snk
+*.key
+*.pem
+.env
+.env.*
+
+# OS metadata
+Thumbs.db
+Desktop.ini
+.DS_Store
