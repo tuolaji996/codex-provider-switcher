@@ -14,17 +14,9 @@ function Invoke-DotNet {
         [string[]]$Arguments
     )
 
-    $argumentLine = ($Arguments | ForEach-Object {
-        '"' + $_.Replace('"', '\"') + '"'
-    }) -join " "
-    $process = Start-Process `
-        -FilePath $DotNet `
-        -ArgumentList $argumentLine `
-        -Wait `
-        -PassThru `
-        -NoNewWindow
-    if ($process.ExitCode -ne 0) {
-        throw "dotnet failed with exit code $($process.ExitCode): $($Arguments -join ' ')"
+    & $DotNet @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet failed with exit code ${LASTEXITCODE}: $($Arguments -join ' ')"
     }
 }
 
