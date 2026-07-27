@@ -40,6 +40,35 @@ Check(
     ThemePreference.NormalizeCode("unsupported") == ThemePreference.LightCode,
     "An unsupported theme did not fall back to light.");
 
+var embeddedNavigationCases = new[]
+{
+    ("https://sui-xiang.com/", false, EmbeddedNavigationAction.AllowEmbedded),
+    ("https://login.sui-xiang.com/path", false, EmbeddedNavigationAction.AllowEmbedded),
+    ("https://captcha.qq.com/", false, EmbeddedNavigationAction.AllowEmbedded),
+    ("https://verify.qcloud.com/", false, EmbeddedNavigationAction.AllowEmbedded),
+    ("https://verify.tencent-cloud.com/", false, EmbeddedNavigationAction.AllowEmbedded),
+    ("https://verify.tencentcs.com/", false, EmbeddedNavigationAction.AllowEmbedded),
+    ("https://example.com/", true, EmbeddedNavigationAction.OpenExternal),
+    ("https://example.com/", false, EmbeddedNavigationAction.Block),
+    ("https://sui-xiang.com.evil.example/", true, EmbeddedNavigationAction.OpenExternal),
+    ("https://sui-xiang.com.evil.example/", false, EmbeddedNavigationAction.Block),
+    ("https://evilqq.com/", false, EmbeddedNavigationAction.Block),
+    ("http://sui-xiang.com/", true, EmbeddedNavigationAction.Block),
+    ("javascript:alert(1)", true, EmbeddedNavigationAction.Block),
+    ("data:text/plain,hello", true, EmbeddedNavigationAction.Block),
+    ("file:///C:/Windows/System32/drivers/etc/hosts", true, EmbeddedNavigationAction.Block),
+    ("not a URI", true, EmbeddedNavigationAction.Block),
+    (string.Empty, true, EmbeddedNavigationAction.Block)
+};
+foreach (var navigationCase in embeddedNavigationCases)
+{
+    Check(
+        SuiXiangNavigationPolicy.Classify(
+            navigationCase.Item1,
+            navigationCase.Item2) == navigationCase.Item3,
+        $"Embedded navigation policy misclassified {navigationCase.Item1}.");
+}
+
 Localizer.Use(AppLanguage.English);
 Check(
     Localizer.Text("中文", "English") == "English",
@@ -220,6 +249,45 @@ try
         migrated.Settings.UiLanguage == Localizer.EnglishCode &&
         migrated.Settings.UiTheme == ThemePreference.DarkCode,
         "Migration changed a legacy provider or interface preference.");
+
+    var legacyOfficialSettingsPath = Path.Combine(
+        migrationRoot,
+        "legacy-official-settings.json");
+    File.WriteAllText(
+        legacyOfficialSettingsPath,
+        """
+        {
+          "UiLanguage": "zh-CN",
+          "OfficialModel": "official-before-load",
+          "OfficialReviewModel": "review-before-load",
+          "ThirdPartyBaseUrl": "https://saved-provider.example/v1",
+          "ThirdPartyModel": "saved-provider-model",
+          "RestartAfterSwitch": true
+        }
+        """);
+    var migratedOfficial = new SettingsStore(legacyOfficialSettingsPath).LoadWithStatus(
+        new ConfigStatus(
+            ProviderMode.Official,
+            AppPaths.StableProviderId,
+            "official-current",
+            "review-current",
+            null,
+            true));
+    Check(
+        migratedOfficial.WasMigrated &&
+        migratedOfficial.Settings.OnboardingCompleted,
+        "A v1.3 official configuration was not migrated as already onboarded.");
+    Check(
+        migratedOfficial.Settings.OfficialModel == "official-current" &&
+        migratedOfficial.Settings.OfficialReviewModel == "review-current" &&
+        migratedOfficial.Settings.ThirdPartyBaseUrl ==
+        "https://saved-provider.example/v1" &&
+        migratedOfficial.Settings.ThirdPartyModel == "saved-provider-model",
+        "Official migration did not preserve the saved third-party route.");
+    Check(
+        migratedOfficial.Settings.ActiveProviderProfile?.CredentialTarget ==
+        AppPaths.LegacySuiXiangCredentialTarget,
+        "Official migration did not retain the legacy v1.3 credential target.");
 
     var freshSettingsPath = Path.Combine(migrationRoot, "fresh-settings.json");
     var fresh = new SettingsStore(freshSettingsPath).LoadWithStatus(
@@ -750,6 +818,34 @@ try
             Check(
                 invalidBroker.ExitCode == 3,
                 "Token broker accepted an unmanaged credential target.");
+        }
+
+        var missingTarget = CredentialTargetFactory.CreateForProfileId(
+            Guid.NewGuid().ToString("N"));
+        CredentialVault.Delete(missingTarget);
+        using var missingBroker = Process.Start(new ProcessStartInfo
+        {
+            FileName = args[0],
+            ArgumentList = { "--credential-target", missingTarget },
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        });
+        if (missingBroker is null)
+        {
+            failures.Add("Token broker missing-credential check did not start.");
+        }
+        else
+        {
+            var missingOutput = missingBroker.StandardOutput.ReadToEnd();
+            missingBroker.WaitForExit();
+            Check(
+                missingBroker.ExitCode == 2,
+                "Token broker did not report a missing managed credential.");
+            Check(
+                string.IsNullOrEmpty(missingOutput),
+                "Token broker wrote output for a missing credential.");
         }
 
         if (HasRunnableDefaultWsl())

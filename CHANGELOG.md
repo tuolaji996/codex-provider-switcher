@@ -2,6 +2,39 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Added
+
+- A six-step first-run guide with an explicit read-only environment check and a
+  final confirmation page before any provider setting is validated or applied.
+- Windows CI for Release publishing, self-tests, bilingual-copy validation,
+  required artifact checks, and a redacted repository secret scan.
+- A pure embedded-navigation policy with regression coverage for SuiXiang,
+  Tencent CAPTCHA hosts, external links, malformed URLs, and unsafe schemes.
+
+### Changed
+
+- The optional SuiXiang WebView now serializes initialization and data clearing,
+  reports navigation and process failures, provides a 20-second soft timeout,
+  and keeps retry or manual API-key entry available.
+- External HTTPS pages open only after a user-initiated navigation. Passive
+  redirects, malformed URLs, and unsafe protocols are blocked.
+- The application icon is now a clean nine-size, 32-bit Windows icon instead of
+  a single 256-pixel, 16-color frame that became muddy in title bars.
+
+### Verified
+
+- Existing v1.3 official and third-party settings migration, fresh and malformed
+  settings, managed credential targets, and missing token-broker credentials
+  have explicit self-test coverage.
+
+### Boundaries
+
+- The embedded page does not inspect DOM, passwords, CAPTCHA data, cookies, or
+  infer whether sign-in succeeded. Automatic SuiXiang API-key creation still
+  requires an approved provider API, and real CAPTCHA remains an E2E test item.
+
 ## [1.3.1] - 2026-07-26
 
 ### Added

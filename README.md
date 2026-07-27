@@ -31,8 +31,10 @@ and to select Light, Dark, or System appearance. Both choices are remembered.
 
 ## Guided setup
 
-On a new install, the application opens a short bilingual setup flow. It offers
-three equally valid choices:
+On a new install, the application opens a short bilingual setup flow. It first
+checks the Codex configuration, WebView2 availability, current route, and
+managed credential reference without reading an API key or changing any
+setting. It then offers three equally valid choices:
 
 - **Sign in with SuiXiang** opens SuiXiang's real sign-in page in an isolated
   WebView2 profile. The user completes any Tencent CAPTCHA personally. The app
@@ -42,10 +44,16 @@ three equally valid choices:
   newly generated API key.
 - **Use official Codex for now** keeps the current official route unchanged.
 
+Every choice ends on a confirmation page. Provider validation and switching
+start only after the user selects **Apply settings**; Back, Cancel, and the
+environment check do not write provider configuration or credentials.
+
 The SuiXiang route is optional. It is not required to use a custom provider or
 official Codex. Automatic API-key retrieval or creation is intentionally not
 implemented until SuiXiang supplies an approved desktop authorization and key
-management API.
+management API. The embedded page reports loading, network, HTTP, and process
+failures with retry or manual-key fallback, but never guesses whether sign-in
+succeeded.
 
 After setup, Home shows the current route and one primary action: connect a
 provider, switch to it, or switch back to official Codex. Advanced provider,

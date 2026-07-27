@@ -4,7 +4,7 @@
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         Title="Codex Provider Switcher"
         Width="760"
-        Height="610"
+        Height="650"
         MinWidth="640"
         MinHeight="520"
         ResizeMode="CanResize"
@@ -90,6 +90,174 @@
                         Click="WelcomeContinueButton_Click" />
             </Grid>
 
+            <Grid x:Name="EnvironmentCheckPanel" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <StackPanel>
+                    <TextBlock x:Name="EnvironmentCheckTitleText"
+                               Text="检查运行环境"
+                               FontSize="22"
+                               FontWeight="SemiBold" />
+                    <TextBlock x:Name="EnvironmentCheckDescriptionText"
+                               Text="这里只检查是否准备好，不会读取 API Key，也不会修改当前线路。"
+                               Style="{StaticResource PageLeadStyle}"
+                               Margin="0,7,0,0" />
+                </StackPanel>
+                <Border Grid.Row="1"
+                        Margin="0,20,0,0"
+                        Background="{DynamicResource SurfaceBrush}"
+                        BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                    <Grid Margin="18,6">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="1" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="1" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="1" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0" Margin="0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="34" />
+                                <ColumnDefinition Width="145" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="ConfigCheckIconText"
+                                       Text="&#xE895;"
+                                       FontFamily="{StaticResource IconFont}"
+                                       FontSize="17"
+                                       VerticalAlignment="Center" />
+                            <TextBlock x:Name="ConfigCheckLabelText"
+                                       Grid.Column="1"
+                                       Text="Codex 配置"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                <TextBlock x:Name="ConfigCheckStatusText"
+                                           Text="检查中…"
+                                           FontWeight="SemiBold" />
+                                <TextBlock x:Name="ConfigCheckDescriptionText"
+                                           Style="{StaticResource PageLeadStyle}"
+                                           Margin="0,2,0,0" />
+                            </StackPanel>
+                        </Grid>
+                        <Border Grid.Row="1"
+                                Background="{DynamicResource BorderBrush}" />
+
+                        <Grid Grid.Row="2" Margin="0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="34" />
+                                <ColumnDefinition Width="145" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="WebViewCheckIconText"
+                                       Text="&#xE895;"
+                                       FontFamily="{StaticResource IconFont}"
+                                       FontSize="17"
+                                       VerticalAlignment="Center" />
+                            <TextBlock x:Name="WebViewCheckLabelText"
+                                       Grid.Column="1"
+                                       Text="登录窗口"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                <TextBlock x:Name="WebViewCheckStatusText"
+                                           Text="检查中…"
+                                           FontWeight="SemiBold" />
+                                <TextBlock x:Name="WebViewCheckDescriptionText"
+                                           Style="{StaticResource PageLeadStyle}"
+                                           Margin="0,2,0,0" />
+                            </StackPanel>
+                        </Grid>
+                        <Border Grid.Row="3"
+                                Background="{DynamicResource BorderBrush}" />
+
+                        <Grid Grid.Row="4" Margin="0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="34" />
+                                <ColumnDefinition Width="145" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="RouteCheckIconText"
+                                       Text="&#xE895;"
+                                       FontFamily="{StaticResource IconFont}"
+                                       FontSize="17"
+                                       VerticalAlignment="Center" />
+                            <TextBlock x:Name="RouteCheckLabelText"
+                                       Grid.Column="1"
+                                       Text="当前线路"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                <TextBlock x:Name="RouteCheckStatusText"
+                                           Text="检查中…"
+                                           FontWeight="SemiBold" />
+                                <TextBlock x:Name="RouteCheckDescriptionText"
+                                           Style="{StaticResource PageLeadStyle}"
+                                           Margin="0,2,0,0" />
+                            </StackPanel>
+                        </Grid>
+                        <Border Grid.Row="5"
+                                Background="{DynamicResource BorderBrush}" />
+
+                        <Grid Grid.Row="6" Margin="0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="34" />
+                                <ColumnDefinition Width="145" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="CredentialCheckIconText"
+                                       Text="&#xE895;"
+                                       FontFamily="{StaticResource IconFont}"
+                                       FontSize="17"
+                                       VerticalAlignment="Center" />
+                            <TextBlock x:Name="CredentialCheckLabelText"
+                                       Grid.Column="1"
+                                       Text="凭据引用"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                <TextBlock x:Name="CredentialCheckStatusText"
+                                           Text="检查中…"
+                                           FontWeight="SemiBold" />
+                                <TextBlock x:Name="CredentialCheckDescriptionText"
+                                           Style="{StaticResource PageLeadStyle}"
+                                           Margin="0,2,0,0" />
+                            </StackPanel>
+                        </Grid>
+                    </Grid>
+                </Border>
+                <DockPanel Grid.Row="2" Margin="0,18,0,0">
+                    <Button x:Name="EnvironmentCheckBackButton"
+                            Content="返回"
+                            Tag="&#xE72B;"
+                            Style="{StaticResource SecondaryButton}"
+                            DockPanel.Dock="Left"
+                            Click="EnvironmentCheckBackButton_Click" />
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Right">
+                        <Button x:Name="EnvironmentRecheckButton"
+                                Content="重新检查"
+                                Tag="&#xE72C;"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,8,0"
+                                Click="EnvironmentRecheckButton_Click" />
+                        <Button x:Name="EnvironmentContinueButton"
+                                Content="继续"
+                                Tag="&#xE72A;"
+                                Style="{StaticResource PrimaryButton}"
+                                Click="EnvironmentContinueButton_Click" />
+                    </StackPanel>
+                </DockPanel>
+            </Grid>
+
             <Grid x:Name="ChoicePanel" Visibility="Collapsed">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -156,7 +324,7 @@
                            FontWeight="SemiBold" />
                 <TextBlock x:Name="SuiXiangLoginDescriptionText"
                            Grid.Row="1"
-                           Text="请自行完成登录和腾讯验证码。登录不会自动导入 API Key；这个页面由随想提供，本程序不会读取密码、验证码或 Cookie。"
+                           Text="请自行完成登录和腾讯验证码。本程序不会判断登录是否成功，也不会读取密码、验证码或 Cookie。"
                            Style="{StaticResource PageLeadStyle}"
                            Margin="0,7,0,14" />
                 <Border Grid.Row="2"
@@ -169,6 +337,11 @@
                         <TextBlock x:Name="WebViewStatusText"
                                    Text="正在准备登录窗口…"
                                    Foreground="{DynamicResource MutedTextBrush}"
+                                   Background="{DynamicResource SurfaceBrush}"
+                                   MaxWidth="560"
+                                   Padding="18"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center" />
                     </Grid>
@@ -185,16 +358,18 @@
                                 Content="刷新"
                                 Tag="&#xE72C;"
                                 Style="{StaticResource SecondaryButton}"
+                                IsEnabled="False"
                                 Margin="0,0,8,0"
                                 Click="SuiXiangRefreshButton_Click" />
                         <Button x:Name="ClearSuiXiangLoginButton"
                                 Content="清除登录数据"
                                 Tag="&#xE74D;"
                                 Style="{StaticResource SecondaryButton}"
+                                IsEnabled="False"
                                 Margin="0,0,8,0"
                                 Click="ClearSuiXiangLoginButton_Click" />
                         <Button x:Name="SuiXiangContinueButton"
-                                Content="继续填写 API Key"
+                                Content="完成或跳过，继续填写 API Key"
                                 Tag="&#xE72A;"
                                 Style="{StaticResource PrimaryButton}"
                                 Click="SuiXiangContinueButton_Click" />
@@ -288,6 +463,74 @@
                             Style="{StaticResource PrimaryButton}"
                             HorizontalAlignment="Right"
                             Click="ConnectProviderButton_Click" />
+                </DockPanel>
+            </Grid>
+
+            <Grid x:Name="CompletionPanel" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <StackPanel VerticalAlignment="Center" MaxWidth="590">
+                    <Border Width="48"
+                            Height="48"
+                            Background="{DynamicResource AccentBrush}"
+                            CornerRadius="6"
+                            HorizontalAlignment="Left">
+                        <TextBlock Text="&#xE73E;"
+                                   FontFamily="{StaticResource IconFont}"
+                                   FontSize="23"
+                                   Foreground="{DynamicResource AccentForegroundBrush}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock x:Name="CompletionTitleText"
+                               Text="设置已准备好"
+                               FontSize="26"
+                               FontWeight="SemiBold"
+                               Margin="0,20,0,8" />
+                    <TextBlock x:Name="CompletionDescriptionText"
+                               Text="确认后才会验证并应用设置。"
+                               Style="{StaticResource PageLeadStyle}" />
+                    <Border Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource BorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Margin="0,20,0,0"
+                            Padding="16,14">
+                        <StackPanel>
+                            <TextBlock x:Name="CompletionRouteLabelText"
+                                       Text="准备使用"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       FontSize="12" />
+                            <TextBlock x:Name="CompletionRouteValueText"
+                                       Text="官方 Codex"
+                                       FontSize="17"
+                                       FontWeight="SemiBold"
+                                       Margin="0,3,0,0" />
+                            <TextBlock x:Name="CompletionDetailsText"
+                                       Style="{StaticResource PageLeadStyle}"
+                                       Margin="0,7,0,0" />
+                        </StackPanel>
+                    </Border>
+                    <TextBlock x:Name="CompletionSafetyText"
+                               Text="官方登录和聊天记录不会被删除。"
+                               Style="{StaticResource PageLeadStyle}"
+                               Margin="0,14,0,0" />
+                </StackPanel>
+                <DockPanel Grid.Row="1" Margin="0,18,0,0">
+                    <Button x:Name="CompletionBackButton"
+                            Content="返回"
+                            Tag="&#xE72B;"
+                            Style="{StaticResource SecondaryButton}"
+                            DockPanel.Dock="Left"
+                            Click="CompletionBackButton_Click" />
+                    <Button x:Name="CompletionFinishButton"
+                            Content="应用设置"
+                            Tag="&#xE73E;"
+                            Style="{StaticResource PrimaryButton}"
+                            HorizontalAlignment="Right"
+                            Click="CompletionFinishButton_Click" />
                 </DockPanel>
             </Grid>
         </Grid>
