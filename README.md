@@ -15,8 +15,7 @@ product.
 
 ## Install
 
-1. Download `CodexProviderSwitcher-v1.3.2-win-x64.zip` from the latest GitHub
-   Release.
+1. Download the Windows x64 ZIP from the latest GitHub Release.
 2. Extract the archive.
 3. Run `install.ps1` from PowerShell.
 4. Start **Codex Provider Switcher** from the desktop shortcut.
