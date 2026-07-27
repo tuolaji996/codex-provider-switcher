@@ -1852,7 +1852,7 @@ public partial class MainWindow : Window
     {
         var version = typeof(MainWindow).Assembly.GetName().Version;
         var displayVersion = version is null
-            ? "1.3.1"
+            ? "1.3.2"
             : $"{version.Major}.{version.Minor}.{version.Build}";
         VersionText.Text = $"v{displayVersion}";
         SettingsVersionText.Text = $"Codex Provider Switcher v{displayVersion}";
