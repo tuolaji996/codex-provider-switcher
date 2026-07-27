@@ -3,7 +3,9 @@ namespace CodexProviderSwitcher.Core;
 public static class AppPaths
 {
     public const string StableProviderId = "OpenAI";
-    public const string CredentialTarget = "CodexProviderSwitcher:sui-xiang";
+    // Retained for v1.3 migrations so existing saved keys continue to work.
+    public const string LegacySuiXiangCredentialTarget = "CodexProviderSwitcher:sui-xiang";
+    public const string CredentialTarget = LegacySuiXiangCredentialTarget;
     public const string DefaultBaseUrl = "https://sui-xiang.com/v1";
     public const string DefaultThirdPartyModel = "codex-auto-review";
     public const string DefaultThirdPartyImageModel = "gpt-image-2";
@@ -36,4 +38,9 @@ public static class AppPaths
     public static string BackupsRoot => Path.Combine(LocalDataRoot, "Backups");
 
     public static string DiagnosticsRoot => Path.Combine(LocalDataRoot, "Diagnostics");
+
+    public static string WebView2Root => Path.Combine(LocalDataRoot, "WebView2");
+
+    public static string SuiXiangWebView2UserDataFolder =>
+        Path.Combine(WebView2Root, "SuiXiang");
 }

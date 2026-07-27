@@ -176,6 +176,123 @@ finally
     Directory.Delete(settingsStoreRoot, true);
 }
 
+var migrationRoot = Path.Combine(
+    Path.GetTempPath(),
+    $"codex-provider-switcher-migration-test-{Guid.NewGuid():N}");
+Directory.CreateDirectory(migrationRoot);
+try
+{
+    var legacySettingsPath = Path.Combine(migrationRoot, "legacy-settings.json");
+    File.WriteAllText(
+        legacySettingsPath,
+        """
+        {
+          "UiLanguage": "en-US",
+          "UiTheme": "dark",
+          "OfficialModel": "official-legacy",
+          "OfficialReviewModel": "review-legacy",
+          "ThirdPartyBaseUrl": "https://legacy.example/v1",
+          "ThirdPartyModel": "legacy-model",
+          "RestartAfterSwitch": false
+        }
+        """);
+    var migrated = new SettingsStore(legacySettingsPath).LoadWithStatus(
+        new ConfigStatus(
+            ProviderMode.ThirdParty,
+            AppPaths.StableProviderId,
+            "legacy-model",
+            "legacy-model",
+            "https://legacy.example/v1",
+            false,
+            AppPaths.LegacySuiXiangCredentialTarget));
+    Check(migrated.WasMigrated, "A v1.3 settings document was not migrated.");
+    Check(
+        migrated.Settings.SettingsSchemaVersion == SwitcherSettings.CurrentSchemaVersion &&
+        migrated.Settings.OnboardingCompleted,
+        "A migrated v1.3 user was not preserved as already onboarded.");
+    Check(
+        migrated.Settings.ActiveProviderProfile?.CredentialTarget ==
+        AppPaths.LegacySuiXiangCredentialTarget,
+        "A migrated v1.3 profile did not retain its legacy credential target.");
+    Check(
+        migrated.Settings.ThirdPartyBaseUrl == "https://legacy.example/v1" &&
+        migrated.Settings.ThirdPartyModel == "legacy-model" &&
+        migrated.Settings.UiLanguage == Localizer.EnglishCode &&
+        migrated.Settings.UiTheme == ThemePreference.DarkCode,
+        "Migration changed a legacy provider or interface preference.");
+
+    var freshSettingsPath = Path.Combine(migrationRoot, "fresh-settings.json");
+    var fresh = new SettingsStore(freshSettingsPath).LoadWithStatus(
+        new ConfigStatus(
+            ProviderMode.Unknown,
+            string.Empty,
+            null,
+            null,
+            null,
+            false));
+    Check(fresh.IsNewInstall, "A missing settings file was not treated as a new install.");
+    Check(!fresh.Settings.OnboardingCompleted, "A new install incorrectly skipped onboarding.");
+    Check(
+        fresh.Settings.ActiveProviderProfile is { } freshProfile &&
+        CredentialTargetFactory.IsValid(freshProfile.CredentialTarget) &&
+        freshProfile.CredentialTarget != AppPaths.LegacySuiXiangCredentialTarget,
+        "A new install did not receive an isolated provider credential target.");
+
+    var corruptSettingsPath = Path.Combine(migrationRoot, "corrupt-settings.json");
+    File.WriteAllText(corruptSettingsPath, "{ definitely not json");
+    var recovered = new SettingsStore(corruptSettingsPath).LoadWithStatus(
+        new ConfigStatus(
+            ProviderMode.Unknown,
+            string.Empty,
+            null,
+            null,
+            null,
+            false));
+    Check(
+        recovered.RecoveryNotice is not null &&
+        Directory.GetFiles(migrationRoot, "corrupt-settings.corrupt-*.json").Length == 1,
+        "A corrupt settings file was not quarantined before recovery.");
+
+    var repairedProfileSettingsPath = Path.Combine(
+        migrationRoot,
+        "repaired-profile-settings.json");
+    var repairedProfileSettings = new SwitcherSettings
+    {
+        OnboardingCompleted = true,
+        ProviderProfiles =
+        [
+            new ProviderProfile
+            {
+                Id = "not-a-guid",
+                BaseUrl = "https://profile-repair.example/v1",
+                Model = "profile-repair-model",
+                CredentialTarget = "unmanaged:credential"
+            }
+        ],
+        ActiveProviderProfileId = "not-a-guid"
+    };
+    File.WriteAllText(
+        repairedProfileSettingsPath,
+        JsonSerializer.Serialize(repairedProfileSettings));
+    var repaired = new SettingsStore(repairedProfileSettingsPath).LoadWithStatus(
+        new ConfigStatus(
+            ProviderMode.Unknown,
+            string.Empty,
+            null,
+            null,
+            null,
+            false));
+    Check(
+        repaired.Settings.ActiveProviderProfile is { } repairedProfile &&
+        Guid.TryParse(repairedProfile.Id, out _) &&
+        CredentialTargetFactory.IsValid(repairedProfile.CredentialTarget),
+        "An invalid active profile ID or credential target was not repaired safely.");
+}
+finally
+{
+    Directory.Delete(migrationRoot, true);
+}
+
 var backupCatalogRoot = Path.Combine(
     Path.GetTempPath(),
     $"codex-provider-switcher-backup-test-{Guid.NewGuid():N}");
@@ -277,17 +394,31 @@ var original = """
     command = "sample.exe"
     """;
 
+var profileCredentialTarget = CredentialTargetFactory.CreateForProfileId(
+    Guid.NewGuid().ToString("N"));
+Check(
+    CredentialTargetFactory.IsValid(profileCredentialTarget) &&
+    CredentialTargetFactory.IsValid(AppPaths.LegacySuiXiangCredentialTarget) &&
+    !CredentialTargetFactory.IsValid("unmanaged:credential"),
+    "Credential target validation did not enforce the managed namespace.");
 var thirdParty = service.BuildThirdPartyConfig(
     original,
     "codex-auto-review",
     "https://sui-xiang.com/v1/",
-    @"C:\Users\Test\AppData\Local\Programs\CodexProviderSwitcher\CodexProviderToken.exe");
+    @"C:\Users\Test\AppData\Local\Programs\CodexProviderSwitcher\CodexProviderToken.exe",
+    profileCredentialTarget);
 var thirdPartyStatus = service.ParseStatus(thirdParty);
 Check(thirdPartyStatus.Mode == ProviderMode.ThirdParty, "Third-party mode was not detected.");
 Check(thirdPartyStatus.ProviderId == "OpenAI", "Stable provider ID changed.");
 Check(thirdPartyStatus.Model == "codex-auto-review", "Third-party model was not written.");
 Check(thirdPartyStatus.ReviewModel == "codex-auto-review", "Review model was not switched.");
 Check(thirdPartyStatus.BaseUrl == "https://sui-xiang.com/v1", "Base URL was not normalized.");
+Check(
+    thirdPartyStatus.CredentialTarget == profileCredentialTarget &&
+    thirdParty.Contains(
+        $"args = [\"--credential-target\", \"{profileCredentialTarget}\"]",
+        StringComparison.Ordinal),
+    "The selected provider credential target was not written to config.toml.");
 Check(
     thirdParty.Contains(
         "command = \"/mnt/c/Users/Test/AppData/Local/Programs/CodexProviderSwitcher/CodexProviderToken.exe\"",
@@ -318,6 +449,31 @@ Check(
         "[model_providers.OpenAI]",
         StringSplitOptions.None).Length == 2,
     "Managed provider block was duplicated.");
+var legacyTargetStatus = service.ParseStatus(
+    thirdParty.Replace(
+        $"args = [\"--credential-target\", \"{profileCredentialTarget}\"]",
+        "args = []",
+        StringComparison.Ordinal));
+Check(
+    legacyTargetStatus.CredentialTarget == AppPaths.LegacySuiXiangCredentialTarget,
+    "A v1.3 empty broker argument list did not map to the legacy credential target.");
+var rejectedUnmanagedCredentialTarget = false;
+try
+{
+    _ = service.BuildThirdPartyConfig(
+        original,
+        "codex-auto-review",
+        "https://sui-xiang.com/v1",
+        @"C:\Users\Test\AppData\Local\Programs\CodexProviderSwitcher\CodexProviderToken.exe",
+        "unmanaged:credential");
+}
+catch (ArgumentException)
+{
+    rejectedUnmanagedCredentialTarget = true;
+}
+Check(
+    rejectedUnmanagedCredentialTarget,
+    "Config generation accepted an unmanaged credential target.");
 
 var official = service.BuildOfficialConfig(thirdParty, "gpt-5.6-sol", "gpt-5.5");
 var officialStatus = service.ParseStatus(official);
@@ -545,7 +701,7 @@ finally
     Directory.Delete(temporaryCodexHome, true);
 }
 
-var testTarget = $"CodexProviderSwitcher:self-test:{Guid.NewGuid():N}";
+var testTarget = CredentialTargetFactory.CreateForProfileId(Guid.NewGuid().ToString("N"));
 var testSecret = $"test-{Guid.NewGuid():N}";
 try
 {
@@ -573,6 +729,27 @@ try
             broker.WaitForExit();
             Check(broker.ExitCode == 0, "Token broker returned a non-zero exit code.");
             Check(output == testSecret, "Token broker returned the wrong credential.");
+        }
+
+        using var invalidBroker = Process.Start(new ProcessStartInfo
+        {
+            FileName = args[0],
+            ArgumentList = { "--credential-target", "unmanaged:credential" },
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        });
+        if (invalidBroker is null)
+        {
+            failures.Add("Token broker invalid-target check did not start.");
+        }
+        else
+        {
+            invalidBroker.WaitForExit();
+            Check(
+                invalidBroker.ExitCode == 3,
+                "Token broker accepted an unmanaged credential target.");
         }
 
         if (HasRunnableDefaultWsl())

@@ -2,6 +2,55 @@
 
 All notable changes to this project are documented here.
 
+## [1.3.1] - 2026-07-26
+
+### Added
+
+- A first-run bilingual setup flow with three parallel choices: optional
+  SuiXiang sign-in, a manually configured OpenAI-compatible service, or
+  official Codex only.
+- An isolated Microsoft Edge WebView2 profile for the optional SuiXiang
+  sign-in page. The user completes CAPTCHA and any login interaction directly;
+  the application does not inspect passwords, CAPTCHA data, or cookies.
+- A `Run setup again` action in Settings that reopens the guide without clearing
+  data merely by opening or cancelling it, plus an explicit action to clear the
+  isolated SuiXiang WebView sign-in data.
+- Per-provider managed Credential Manager targets and a credential-target-aware
+  Codex token broker, so new custom providers do not share the legacy key slot.
+
+### Changed
+
+- The Home page now centers the current route and one dynamic daily action:
+  connect a provider, switch to the configured provider, or return to official
+  Codex.
+- Existing v1.3 settings migrate in place without forcing users through setup;
+  their saved SuiXiang credential target is retained.
+- Generated third-party `config.toml` uses the selected profile's managed
+  credential target while preserving `model_provider = "OpenAI"`.
+- A Base URL change now requires an explicitly supplied new API key unless the
+  endpoint already has its own saved provider profile; an old key is never sent
+  to a newly entered service.
+
+### Fixed
+
+- Malformed local settings are quarantined with a timestamp before new defaults
+  are created, rather than being silently overwritten.
+
+### Boundaries
+
+- SuiXiang sign-in is optional. The current release still requires the user to
+  paste a newly created API key after login. Automatic key retrieval or creation
+  requires an approved provider authorization and key-management API.
+
+### Verified
+
+- The Windows .NET 8 build publishes both native executables and passes the
+  migration, credential-target, token-broker, and configuration round-trip
+  self-tests.
+- The published WPF application starts as a responsive native Windows window.
+- The release package requires and includes `WebView2Loader.dll` for the
+  optional embedded sign-in flow.
+
 ## [1.3.0] - 2026-07-25
 
 ### Added

@@ -15,21 +15,49 @@ product.
 
 ## Install
 
-1. Download `CodexProviderSwitcher-v1.3.0-win-x64.zip` from the latest GitHub
+1. Download `CodexProviderSwitcher-v1.3.1-win-x64.zip` from the latest GitHub
    Release.
 2. Extract the archive.
 3. Run `install.ps1` from PowerShell.
 4. Start **Codex Provider Switcher** from the desktop shortcut.
 
 Windows 10 or 11 and the .NET 8 Windows Desktop Runtime are required. The
-release is currently unsigned, so Windows SmartScreen may ask for confirmation.
+optional embedded SuiXiang sign-in also needs the Microsoft Edge WebView2
+Runtime, which is normally installed with current Edge. The release is currently
+unsigned, so Windows SmartScreen may ask for confirmation.
 
 Use **Settings** to switch the complete interface between Chinese and English,
 and to select Light, Dark, or System appearance. Both choices are remembered.
 
+## Guided setup
+
+On a new install, the application opens a short bilingual setup flow. It offers
+three equally valid choices:
+
+- **Sign in with SuiXiang** opens SuiXiang's real sign-in page in an isolated
+  WebView2 profile. The user completes any Tencent CAPTCHA personally. The app
+  does not read passwords, CAPTCHA data, or cookies. After sign-in, the user
+  creates an API key with SuiXiang and pastes it into the app.
+- **Use another service** accepts an OpenAI-compatible Base URL, model, and a
+  newly generated API key.
+- **Use official Codex for now** keeps the current official route unchanged.
+
+The SuiXiang route is optional. It is not required to use a custom provider or
+official Codex. Automatic API-key retrieval or creation is intentionally not
+implemented until SuiXiang supplies an approved desktop authorization and key
+management API.
+
+After setup, Home shows the current route and one primary action: connect a
+provider, switch to it, or switch back to official Codex. Advanced provider,
+diagnostic, backup, language, and appearance controls remain in the navigation
+when needed. **Run setup again** is available at the top of Settings and never
+deletes anything merely by opening or cancelling the guide. Connecting a new
+provider requires its own explicitly supplied API key; official sign-in,
+history, and backups are not removed.
+
 ## Interface
 
-Version 1.3 uses a compact native Windows workspace:
+Version 1.3.1 uses a compact native Windows workspace:
 
 - **Home:** current route, shared-history health, and quick switching.
 - **Providers:** official OpenAI and third-party endpoint, model, and key
@@ -46,6 +74,9 @@ status remains visible in the bottom status bar.
 
 - The official ChatGPT login is never logged out or overwritten.
 - The third-party API key is stored in Windows Credential Manager.
+- Every saved provider profile has its own managed Credential Manager target.
+  Existing v1.3 SuiXiang keys continue using their original target after an
+  in-place migration.
 - `config.toml` contains only a token-broker command, never the API key.
 - Every configuration write first creates a timestamped backup under
   `%LOCALAPPDATA%\CodexProviderSwitcher\Backups`.
@@ -123,7 +154,7 @@ already included on the target machine. A .NET 8 SDK is needed only to build.
 To create the versioned ZIP and SHA-256 file used by GitHub Releases:
 
 ```powershell
-.\release.ps1 -Version 1.3.0 -DotNet "C:\path\to\dotnet.exe"
+.\release.ps1 -Version 1.3.1 -DotNet "C:\path\to\dotnet.exe"
 ```
 
 The installed files are placed in:
