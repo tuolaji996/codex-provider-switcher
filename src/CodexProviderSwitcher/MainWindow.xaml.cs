@@ -30,6 +30,7 @@ public partial class MainWindow : Window
         string ConfigPath);
 
     private readonly ConfigService _configService = new();
+    private readonly ProviderSwitchWorkflowService _switchWorkflow;
     private readonly BackupCatalogService _backupCatalogService = new();
     private readonly SettingsStore _settingsStore = new();
     private readonly SessionHealthService _sessionHealthService = new();
@@ -37,6 +38,7 @@ public partial class MainWindow : Window
     private readonly HostCapabilityDiagnosticsService _hostDiagnosticsService = new();
     private readonly CodexProcessService _processService = new();
     private SwitcherSettings _settings = new();
+    private SettingsLoadResult? _settingsLoadResult;
     private bool _isBusy;
     private bool _isInitialized;
     private bool _systemThemeEventsSubscribed;
@@ -46,6 +48,7 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        _switchWorkflow = new ProviderSwitchWorkflowService(_configService);
         InitializeComponent();
         Loaded += MainWindow_Loaded;
         SizeChanged += MainWindow_SizeChanged;
@@ -55,12 +58,18 @@ public partial class MainWindow : Window
     private string TokenBrokerPath =>
         Path.Combine(AppContext.BaseDirectory, "CodexProviderToken.exe");
 
+    private ProviderProfile ActiveProviderProfile =>
+        _settings.EnsureActiveProviderProfile();
+
+    private string ActiveCredentialTarget => ActiveProviderProfile.CredentialTarget;
+
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         try
         {
             var status = _configService.ReadStatus();
-            _settings = _settingsStore.Load(status);
+            _settingsLoadResult = _settingsStore.LoadWithStatus(status);
+            _settings = _settingsLoadResult.Settings;
             Localizer.Use(_settings.UiLanguage);
             ThemeManager.Apply(_settings.UiTheme);
             ApplyLanguage();
@@ -84,10 +93,16 @@ public partial class MainWindow : Window
             NavigateTo(AppPage.Home);
             SubscribeToSystemThemeEvents();
             UpdateResponsiveLayout();
-            OperationStatusText.Text = T("就绪", "Ready");
+            OperationStatusText.Text = _settingsLoadResult.RecoveryNotice ??
+                                       T("就绪", "Ready");
             MainScrollViewer.ScrollToTop();
             Keyboard.ClearFocus();
             Focus();
+
+            if (!_settings.OnboardingCompleted)
+            {
+                await RunSetupWizardAsync();
+            }
         }
         catch (Exception exception)
         {
@@ -268,6 +283,201 @@ public partial class MainWindow : Window
         });
     }
 
+    private async void RunSetupAgainButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunSetupWizardAsync();
+    }
+
+    private async Task RunSetupWizardAsync()
+    {
+        SetupWizardResult? draft = null;
+        while (true)
+        {
+            var wizard = new SetupWizardWindow(_settings, draft)
+            {
+                Owner = this
+            };
+            if (wizard.ShowDialog() != true || wizard.Result is null)
+            {
+                // A language selection made inside the wizard is useful even if
+                // the user defers provider setup. No provider data is changed.
+                _settingsStore.Save(_settings);
+                OperationStatusText.Text = T(
+                    "设置已保留，当前线路未改动。",
+                    "Setup was deferred; the current route was not changed.");
+                return;
+            }
+
+            var applied = false;
+            await RunBusyAsync(async () =>
+            {
+                await ApplySetupResultAsync(wizard.Result);
+                applied = true;
+            });
+            if (applied)
+            {
+                return;
+            }
+
+            // Keep the entered key only in process memory while the user fixes
+            // a validation error. It is never written until validation passes.
+            draft = wizard.Result;
+        }
+    }
+
+    private async Task ApplySetupResultAsync(SetupWizardResult setup)
+    {
+        if (setup.UseOfficial)
+        {
+            var current = _configService.ReadStatus();
+            if (current.Mode != ProviderMode.Official)
+            {
+                if (!File.Exists(AppPaths.ConfigPath))
+                {
+                    throw new FileNotFoundException(T(
+                        "未找到 Codex config.toml。请先启动一次官方 Codex 后再设置。",
+                        "Codex config.toml was not found. Start official Codex once before setup."),
+                        AppPaths.ConfigPath);
+                }
+
+                OperationStatusText.Text = T(
+                    "正在切换到官方 Codex…",
+                    "Switching to official Codex...");
+                var switchResult = _switchWorkflow.SwitchToOfficial(
+                    new OfficialSwitchRequest(
+                        _settings.OfficialModel,
+                        _settings.OfficialReviewModel));
+                OperationStatusText.Text = F(
+                    "已切换到官方 Codex。备份：{0}",
+                    "Switched to official Codex. Backup: {0}",
+                    switchResult.BackupFolder);
+                await RestartIfRequestedAsync();
+            }
+
+            CompleteOnboarding();
+            await RefreshStatusAsync();
+            RefreshBackups();
+            return;
+        }
+
+        var baseUrl = ConfigService.NormalizeBaseUrl(setup.BaseUrl);
+        var model = setup.Model.Trim();
+        var apiKey = setup.ApiKey?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(model) || apiKey.Length < 16)
+        {
+            throw new InvalidOperationException(T(
+                "请填写模型和完整的新 API Key。",
+                "Enter a model and complete new API key."));
+        }
+
+        OperationStatusText.Text = T(
+            "正在验证第三方 Responses API…",
+            "Validating the third-party Responses API...");
+        var compatibility = await _connectionTestService.TestResponsesApiAsync(
+            baseUrl,
+            model,
+            apiKey);
+        if (!compatibility.Success)
+        {
+            throw new InvalidOperationException(compatibility.Summary);
+        }
+
+        var profile = ActiveProviderProfile;
+        var before = new ProviderProfile
+        {
+            Id = profile.Id,
+            Kind = profile.Kind,
+            DisplayName = profile.DisplayName,
+            BaseUrl = profile.BaseUrl,
+            Model = profile.Model,
+            CredentialTarget = profile.CredentialTarget
+        };
+        var target = CredentialTargetFactory.RequireValid(profile.CredentialTarget);
+        var previousKey = CredentialVault.Read(target);
+        var switched = false;
+        try
+        {
+            profile.Kind = setup.ProviderKind;
+            profile.DisplayName = ResolveSetupDisplayName(setup, baseUrl);
+            profile.BaseUrl = baseUrl;
+            profile.Model = model;
+            _settings.ThirdPartyBaseUrl = baseUrl;
+            _settings.ThirdPartyModel = model;
+
+            CredentialVault.Write(target, apiKey);
+            var switchResult = _switchWorkflow.SwitchToThirdParty(
+                new ThirdPartySwitchRequest(
+                    model,
+                    baseUrl,
+                    TokenBrokerPath,
+                    target));
+            switched = true;
+
+            _settings.LastSuccessfulCompatibilityTestUtc = DateTimeOffset.UtcNow;
+            _settings.LastTestedEndpointFingerprint =
+                ConnectionTestService.EndpointFingerprint(baseUrl, model);
+            CompleteOnboarding();
+            BaseUrlTextBox.Text = baseUrl;
+            ModelTextBox.Text = model;
+            OperationStatusText.Text = F(
+                "已连接 {0}；历史分区保持 {1}。备份：{2}",
+                "Connected to {0}; the history partition remains {1}. Backup: {2}",
+                profile.DisplayName,
+                AppPaths.StableProviderId,
+                switchResult.BackupFolder);
+        }
+        catch when (!switched)
+        {
+            profile.Kind = before.Kind;
+            profile.DisplayName = before.DisplayName;
+            profile.BaseUrl = before.BaseUrl;
+            profile.Model = before.Model;
+            profile.CredentialTarget = before.CredentialTarget;
+            _settings.ThirdPartyBaseUrl = before.BaseUrl;
+            _settings.ThirdPartyModel = before.Model;
+            if (previousKey is null)
+            {
+                CredentialVault.Delete(target);
+            }
+            else
+            {
+                CredentialVault.Write(target, previousKey);
+            }
+
+            throw;
+        }
+
+        await RefreshStatusAsync();
+        RefreshBackups();
+        await RestartIfRequestedAsync();
+    }
+
+    private void CompleteOnboarding()
+    {
+        _settings.OnboardingCompleted = true;
+        _settings.OnboardingVersion = Math.Max(_settings.OnboardingVersion, 1);
+        _settingsStore.Save(_settings);
+    }
+
+    private static string ResolveSetupDisplayName(
+        SetupWizardResult setup,
+        string baseUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(setup.DisplayName))
+        {
+            return setup.DisplayName.Trim();
+        }
+
+        if (setup.ProviderKind == ProviderKinds.SuiXiang)
+        {
+            return "SuiXiang";
+        }
+
+        return Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)
+            ? uri.Host
+            : baseUrl;
+    }
+
     private void HomeOpenProvidersButton_Click(object sender, RoutedEventArgs e) =>
         ProvidersNavigationButton.IsChecked = true;
 
@@ -280,6 +490,25 @@ public partial class MainWindow : Window
     private void HomeSwitchThirdPartyButton_Click(object sender, RoutedEventArgs e) =>
         SwitchThirdPartyButton_Click(sender, e);
 
+    private async void DailyPrimaryActionButton_Click(object sender, RoutedEventArgs e)
+    {
+        var status = _configService.ReadStatus();
+        if (status.Mode == ProviderMode.Official &&
+            CredentialVault.Exists(ActiveCredentialTarget))
+        {
+            SwitchThirdPartyButton_Click(sender, e);
+            return;
+        }
+
+        if (status.Mode == ProviderMode.ThirdParty)
+        {
+            SwitchOfficialButton_Click(sender, e);
+            return;
+        }
+
+        await RunSetupWizardAsync();
+    }
+
     private async Task RefreshStatusAsync()
     {
         var status = _configService.ReadStatus();
@@ -288,24 +517,18 @@ public partial class MainWindow : Window
         CurrentRouteText.Text = status.Mode switch
         {
             ProviderMode.Official =>
-                F(
-                    "官方线路 · ChatGPT 登录 · 模型 {0}",
-                    "Official route · ChatGPT sign-in · Model {0}",
-                    status.Model ?? T("未指定", "Not specified")),
+                T("你正在使用：官方 Codex", "You are using: Official Codex"),
             ProviderMode.ThirdParty =>
                 F(
-                    "第三方线路 · {0} · 模型 {1}",
-                    "Third-party route · {0} · Model {1}",
-                    status.BaseUrl,
-                    status.Model ?? T("未指定", "Not specified")),
+                    "你正在使用：{0}",
+                    "You are using: {0}",
+                    ResolveProviderDisplayName(status)),
             _ =>
-                F(
-                    "检测到未受管理的配置（model_provider = {0}）",
-                    "Unmanaged configuration detected (model_provider = {0})",
-                    status.ProviderId)
+                T("需要完成设置", "Setup required")
         };
+        UpdateDailyPrimaryAction(status);
 
-        KeyStatusText.Text = CredentialVault.Exists(AppPaths.CredentialTarget)
+        KeyStatusText.Text = CredentialVault.Exists(ActiveCredentialTarget)
             ? T("密钥状态：已安全保存", "Key status: securely saved")
             : T(
                 "密钥状态：尚未保存（请使用撤销旧密钥后生成的新密钥）",
@@ -323,6 +546,62 @@ public partial class MainWindow : Window
             health.OtherProviderFiles,
             health.UnreadableFiles,
             health.EmptyPlaceholderFiles);
+    }
+
+    private void UpdateDailyPrimaryAction(ConfigStatus status)
+    {
+        switch (status.Mode)
+        {
+            case ProviderMode.Official when CredentialVault.Exists(ActiveCredentialTarget):
+                DailyPrimaryActionButton.Content = F(
+                    "切换到 {0}",
+                    "Switch to {0}",
+                    ResolveProviderDisplayName(status));
+                DailyPrimaryActionButton.Tag = "\uE8AB";
+                DailyPrimaryActionButton.Style = (Style)FindResource("PrimaryButton");
+                break;
+            case ProviderMode.Official:
+                DailyPrimaryActionButton.Content = ActiveProviderProfile.Kind == ProviderKinds.SuiXiang
+                    ? T("连接随想", "Connect SuiXiang")
+                    : T("连接服务", "Connect a service");
+                DailyPrimaryActionButton.Tag = "\uE8AB";
+                DailyPrimaryActionButton.Style = (Style)FindResource("PrimaryButton");
+                break;
+            case ProviderMode.ThirdParty:
+                DailyPrimaryActionButton.Content = T(
+                    "切换到官方 Codex",
+                    "Switch to official Codex");
+                DailyPrimaryActionButton.Tag = "\uE72E";
+                DailyPrimaryActionButton.Style = (Style)FindResource("OfficialButton");
+                break;
+            default:
+                DailyPrimaryActionButton.Content = T("开始设置", "Start setup");
+                DailyPrimaryActionButton.Tag = "\uE72A";
+                DailyPrimaryActionButton.Style = (Style)FindResource("PrimaryButton");
+                break;
+        }
+    }
+
+    private string ResolveProviderDisplayName(ConfigStatus status)
+    {
+        var profile = _settings.ProviderProfiles.FirstOrDefault(candidate =>
+            string.Equals(
+                candidate.CredentialTarget,
+                status.CredentialTarget,
+                StringComparison.Ordinal)) ?? ActiveProviderProfile;
+        if (profile.Kind == ProviderKinds.SuiXiang)
+        {
+            return T("随想", "SuiXiang");
+        }
+
+        if (!string.IsNullOrWhiteSpace(profile.DisplayName))
+        {
+            return profile.DisplayName;
+        }
+
+        return Uri.TryCreate(status.BaseUrl, UriKind.Absolute, out var uri)
+            ? uri.Host
+            : status.BaseUrl ?? T("第三方服务", "Third-party service");
     }
 
     private async void ChineseLanguageButton_Checked(object sender, RoutedEventArgs e)
@@ -462,6 +741,7 @@ public partial class MainWindow : Window
     {
         await RunBusyAsync(async () =>
         {
+            SaveNonSecretSettings();
             var key = ApiKeyPasswordBox.Password.Trim();
             if (key.Length < 16)
             {
@@ -470,7 +750,7 @@ public partial class MainWindow : Window
                     "Enter the complete newly generated API key."));
             }
 
-            CredentialVault.Write(AppPaths.CredentialTarget, key);
+            CredentialVault.Write(ActiveCredentialTarget, key);
             ApiKeyPasswordBox.Clear();
             OperationStatusText.Text = T(
                 "新密钥已保存到 Windows 凭据管理器。",
@@ -495,7 +775,7 @@ public partial class MainWindow : Window
 
         await RunBusyAsync(async () =>
         {
-            CredentialVault.Delete(AppPaths.CredentialTarget);
+            CredentialVault.Delete(ActiveCredentialTarget);
             ApiKeyPasswordBox.Clear();
             OperationStatusText.Text = T(
                 "第三方密钥已删除。",
@@ -806,31 +1086,19 @@ public partial class MainWindow : Window
                 _settingsStore.Save(_settings);
             }
 
-            var backupFolder = _configService.CreateBackup();
-            var original = File.ReadAllText(AppPaths.ConfigPath);
-            var updated = _configService.BuildThirdPartyConfig(
-                original,
+            var switchResult = _switchWorkflow.SwitchToThirdParty(
+                new ThirdPartySwitchRequest(
                 _settings.ThirdPartyModel,
                 _settings.ThirdPartyBaseUrl,
-                TokenBrokerPath);
-            _configService.WriteConfig(updated);
-
-            var verification = _configService.ReadStatus();
-            if (verification.Mode != ProviderMode.ThirdParty ||
-                verification.ProviderId != AppPaths.StableProviderId)
-            {
-                throw new InvalidOperationException(F(
-                    "配置写入后的自检失败。备份位于：{0}",
-                    "Post-write verification failed. Backup: {0}",
-                    backupFolder));
-            }
+                TokenBrokerPath,
+                ActiveCredentialTarget));
 
             OperationStatusText.Text =
                 F(
                     "已切换到第三方；历史分区保持 {0}。备份：{1}",
                     "Switched to the third-party route; the history partition remains {0}. Backup: {1}",
                     AppPaths.StableProviderId,
-                    backupFolder);
+                    switchResult.BackupFolder);
             await RefreshStatusAsync();
             RefreshBackups();
             await RestartIfRequestedAsync();
@@ -841,30 +1109,18 @@ public partial class MainWindow : Window
     {
         await RunBusyAsync(async () =>
         {
-            SaveNonSecretSettings();
-            var backupFolder = _configService.CreateBackup();
-            var original = File.ReadAllText(AppPaths.ConfigPath);
-            var updated = _configService.BuildOfficialConfig(
-                original,
+            _settings.RestartAfterSwitch = RestartCheckBox.IsChecked == true;
+            _settingsStore.Save(_settings);
+            var switchResult = _switchWorkflow.SwitchToOfficial(
+                new OfficialSwitchRequest(
                 _settings.OfficialModel,
-                _settings.OfficialReviewModel);
-            _configService.WriteConfig(updated);
-
-            var verification = _configService.ReadStatus();
-            if (verification.Mode != ProviderMode.Official ||
-                verification.ProviderId != AppPaths.StableProviderId)
-            {
-                throw new InvalidOperationException(F(
-                    "配置写入后的自检失败。备份位于：{0}",
-                    "Post-write verification failed. Backup: {0}",
-                    backupFolder));
-            }
+                _settings.OfficialReviewModel));
 
             OperationStatusText.Text =
                 F(
                     "已切换到官方 OpenAI；官方登录凭据保持不变。备份：{0}",
                     "Switched to official OpenAI; official sign-in credentials were preserved. Backup: {0}",
-                    backupFolder);
+                    switchResult.BackupFolder);
             await RefreshStatusAsync();
             RefreshBackups();
             await RestartIfRequestedAsync();
@@ -1001,19 +1257,87 @@ public partial class MainWindow : Window
 
     private void SaveNonSecretSettings()
     {
-        _settings.ThirdPartyBaseUrl =
-            ConfigService.NormalizeBaseUrl(BaseUrlTextBox.Text);
-        _settings.ThirdPartyModel = ModelTextBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(_settings.ThirdPartyModel))
+        var normalizedBaseUrl = ConfigService.NormalizeBaseUrl(BaseUrlTextBox.Text);
+        var model = ModelTextBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(model))
         {
             throw new InvalidOperationException(T(
                 "第三方模型不能为空。",
                 "The third-party model cannot be empty."));
         }
 
+        var profile = SelectOrCreateProfileForProviderFields(normalizedBaseUrl, model);
+        profile.Kind = IsSuiXiangBaseUrl(normalizedBaseUrl)
+            ? ProviderKinds.SuiXiang
+            : ProviderKinds.Custom;
+        profile.BaseUrl = normalizedBaseUrl;
+        profile.Model = model;
+        if (profile.Kind == ProviderKinds.Custom &&
+            string.IsNullOrWhiteSpace(profile.DisplayName) &&
+            Uri.TryCreate(normalizedBaseUrl, UriKind.Absolute, out var uri))
+        {
+            profile.DisplayName = uri.Host;
+        }
+
+        _settings.ThirdPartyBaseUrl = normalizedBaseUrl;
+        _settings.ThirdPartyModel = model;
         _settings.RestartAfterSwitch = RestartCheckBox.IsChecked == true;
         _settingsStore.Save(_settings);
         UpdatePersistedProviderCapabilityStatuses();
+    }
+
+    private ProviderProfile SelectOrCreateProfileForProviderFields(
+        string normalizedBaseUrl,
+        string model)
+    {
+        var profile = _settings.ProviderProfiles.FirstOrDefault(candidate =>
+            string.Equals(
+                candidate.BaseUrl,
+                normalizedBaseUrl,
+                StringComparison.OrdinalIgnoreCase));
+        if (profile is null)
+        {
+            var enteredKey = ApiKeyPasswordBox.Password.Trim();
+            if (string.IsNullOrWhiteSpace(enteredKey))
+            {
+                throw new InvalidOperationException(T(
+                    "更换 Base URL 时必须粘贴新的 API Key。已保存的密钥绝不会发送到新服务。",
+                    "Changing the Base URL requires a new API key. A saved key is never sent to a new service."));
+            }
+
+            if (enteredKey.Length < 16)
+            {
+                throw new InvalidOperationException(T(
+                    "请输入新生成的完整 API Key。",
+                    "Enter the complete newly generated API key."));
+            }
+
+            var profileId = Guid.NewGuid().ToString("N");
+            profile = new ProviderProfile
+            {
+                Id = profileId,
+                BaseUrl = normalizedBaseUrl,
+                Model = model,
+                CredentialTarget = CredentialTargetFactory.CreateForProfileId(profileId)
+            };
+            _settings.ProviderProfiles.Add(profile);
+        }
+        else
+        {
+            if (!Guid.TryParse(profile.Id, out _))
+            {
+                profile.Id = Guid.NewGuid().ToString("N");
+            }
+
+            if (!CredentialTargetFactory.IsValid(profile.CredentialTarget))
+            {
+                profile.CredentialTarget =
+                    CredentialTargetFactory.CreateForProfileId(profile.Id);
+            }
+        }
+
+        _settings.ActiveProviderProfileId = profile.Id;
+        return profile;
     }
 
     private void ProviderSettingsTextBox_TextChanged(
@@ -1038,12 +1362,12 @@ public partial class MainWindow : Window
                     "Enter the complete newly generated API key."));
             }
 
-            CredentialVault.Write(AppPaths.CredentialTarget, entered);
+            CredentialVault.Write(ActiveCredentialTarget, entered);
             ApiKeyPasswordBox.Clear();
             return entered;
         }
 
-        return CredentialVault.Read(AppPaths.CredentialTarget)
+        return CredentialVault.Read(ActiveCredentialTarget)
             ?? throw new InvalidOperationException(
                 T(
                     "尚未保存第三方密钥。请先撤销已暴露的旧密钥，再粘贴新密钥。",
@@ -1240,6 +1564,10 @@ public partial class MainWindow : Window
     private static string FormatLocalTime(DateTimeOffset timestamp) =>
         timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
 
+    private static bool IsSuiXiangBaseUrl(string baseUrl) =>
+        Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) &&
+        uri.Host.Equals("sui-xiang.com", StringComparison.OrdinalIgnoreCase);
+
     private async Task RestartIfRequestedAsync()
     {
         if (!_settings.RestartAfterSwitch)
@@ -1320,8 +1648,7 @@ public partial class MainWindow : Window
         OpenRemoteSettingsButton.IsEnabled = !busy;
         SwitchThirdPartyButton.IsEnabled = !busy;
         SwitchOfficialButton.IsEnabled = !busy;
-        HomeSwitchThirdPartyButton.IsEnabled = !busy;
-        HomeSwitchOfficialButton.IsEnabled = !busy;
+        DailyPrimaryActionButton.IsEnabled = !busy;
         HeaderRefreshButton.IsEnabled = !busy;
         ChineseLanguageButton.IsEnabled = !busy;
         EnglishLanguageButton.IsEnabled = !busy;
@@ -1338,6 +1665,7 @@ public partial class MainWindow : Window
             !busy && BackupsDataGrid.SelectedItem is BackupRow;
         OpenDataFolderButton.IsEnabled = !busy;
         OpenGitHubButton.IsEnabled = !busy;
+        RunSetupAgainButton.IsEnabled = !busy;
         BusyProgressBar.Visibility =
             busy ? Visibility.Visible : Visibility.Collapsed;
         Cursor = busy ? System.Windows.Input.Cursors.Wait : null;
@@ -1380,8 +1708,10 @@ public partial class MainWindow : Window
         StableHistoryText.Text = T(
             "固定历史分区：OpenAI（切换时永远不改）",
             "Stable history partition: OpenAI (never changed when switching)");
-        HomeSwitchOfficialButton.Content = T("官方", "Official");
-        HomeSwitchThirdPartyButton.Content = T("第三方", "Third-party");
+        if (_lastConfigStatus is { } currentStatus)
+        {
+            UpdateDailyPrimaryAction(currentStatus);
+        }
         HomeSafetyTitleText.Text = T("本机保护", "Local safeguards");
         OfficialAuthSafetyTitleText.Text = T(
             "官方登录保持不变",
@@ -1480,6 +1810,10 @@ public partial class MainWindow : Window
         SettingsLeadText.Text = T(
             "界面与切换行为会保存在本机，不会改动聊天记录。",
             "Appearance and switching preferences are stored locally and do not modify chat history.");
+        RunSetupAgainButton.Content = T("重新设置", "Run setup again");
+        RunSetupAgainButton.ToolTip = T(
+            "重新运行首次设置向导",
+            "Run the first-time setup wizard again");
         LanguageSettingTitleText.Text = T("界面语言", "Interface language");
         LanguageSettingDescriptionText.Text = T(
             "选择中文或英文。",
@@ -1518,7 +1852,7 @@ public partial class MainWindow : Window
     {
         var version = typeof(MainWindow).Assembly.GetName().Version;
         var displayVersion = version is null
-            ? "1.3.0"
+            ? "1.3.1"
             : $"{version.Major}.{version.Minor}.{version.Build}";
         VersionText.Text = $"v{displayVersion}";
         SettingsVersionText.Text = $"Codex Provider Switcher v{displayVersion}";

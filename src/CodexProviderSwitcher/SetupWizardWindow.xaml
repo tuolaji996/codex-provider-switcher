@@ -1,0 +1,319 @@
+<Window x:Class="CodexProviderSwitcher.SetupWizardWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="Codex Provider Switcher"
+        Width="760"
+        Height="610"
+        MinWidth="640"
+        MinHeight="520"
+        ResizeMode="CanResize"
+        WindowStartupLocation="CenterOwner">
+    <Grid Background="{DynamicResource WindowBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="68" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="56" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0"
+                Background="{DynamicResource NavigationBrush}"
+                BorderBrush="{DynamicResource BorderBrush}"
+                BorderThickness="0,0,0,1">
+            <Grid Margin="26,0,20,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock x:Name="HeaderTitleText"
+                               Text="开始设置"
+                               FontSize="20"
+                               FontWeight="SemiBold" />
+                    <TextBlock x:Name="HeaderSubtitleText"
+                               Text="以后可以随时重新设置"
+                               Foreground="{DynamicResource MutedTextBrush}"
+                               FontSize="12"
+                               Margin="0,2,0,0" />
+                </StackPanel>
+                <Button x:Name="ChineseLanguageButton"
+                        Grid.Column="1"
+                        Content="中文"
+                        Style="{StaticResource SecondaryButton}"
+                        Padding="10,5"
+                        Margin="0,0,8,0"
+                        Click="ChineseLanguageButton_Click" />
+                <Button x:Name="EnglishLanguageButton"
+                        Grid.Column="2"
+                        Content="EN"
+                        Style="{StaticResource SecondaryButton}"
+                        Padding="10,5"
+                        Click="EnglishLanguageButton_Click" />
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="28,24,28,18">
+            <Grid x:Name="WelcomePanel">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <StackPanel VerticalAlignment="Center" MaxWidth="590">
+                    <Border Width="48"
+                            Height="48"
+                            Background="{DynamicResource AccentBrush}"
+                            CornerRadius="6"
+                            HorizontalAlignment="Left">
+                        <TextBlock Text="&#xE8AB;"
+                                   FontFamily="{StaticResource IconFont}"
+                                   FontSize="23"
+                                   Foreground="{DynamicResource AccentForegroundBrush}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock x:Name="WelcomeTitleText"
+                               Text="先把线路设置好"
+                               FontSize="26"
+                               FontWeight="SemiBold"
+                               Margin="0,20,0,10" />
+                    <TextBlock x:Name="WelcomeDescriptionText"
+                               Text="这个设置不会删除官方登录，也不会移动你的聊天记录。"
+                               Style="{StaticResource PageLeadStyle}" />
+                </StackPanel>
+                <Button x:Name="WelcomeContinueButton"
+                        Grid.Row="1"
+                        Content="继续"
+                        Tag="&#xE72A;"
+                        Style="{StaticResource PrimaryButton}"
+                        HorizontalAlignment="Right"
+                        Click="WelcomeContinueButton_Click" />
+            </Grid>
+
+            <Grid x:Name="ChoicePanel" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <StackPanel>
+                    <TextBlock x:Name="ChoiceTitleText"
+                               Text="选择你现在想做的事"
+                               FontSize="22"
+                               FontWeight="SemiBold" />
+                    <TextBlock x:Name="ChoiceDescriptionText"
+                               Text="随想登录是可选的。你也可以直接填写任何兼容 OpenAI 的服务。"
+                               Style="{StaticResource PageLeadStyle}"
+                               Margin="0,7,0,0" />
+                </StackPanel>
+                <StackPanel Grid.Row="1" Margin="0,24,0,0" VerticalAlignment="Top">
+                    <Button x:Name="SuiXiangChoiceButton"
+                            Content="登录随想"
+                            Tag="&#xE8AB;"
+                            Style="{StaticResource PrimaryButton}"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Padding="16,13"
+                            Margin="0,0,0,10"
+                            Click="SuiXiangChoiceButton_Click" />
+                    <TextBlock x:Name="SuiXiangChoiceDescriptionText"
+                               Text="在应用内完成登录和验证码，然后手动粘贴新的 API Key。"
+                               Style="{StaticResource PageLeadStyle}"
+                               Margin="16,-4,16,16" />
+                    <Button x:Name="CustomChoiceButton"
+                            Content="使用其他服务"
+                            Tag="&#xE8A5;"
+                            Style="{StaticResource SecondaryButton}"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Padding="16,13"
+                            Margin="0,0,0,10"
+                            Click="CustomChoiceButton_Click" />
+                    <TextBlock x:Name="CustomChoiceDescriptionText"
+                               Text="填写 Base URL、模型和新的 API Key。"
+                               Style="{StaticResource PageLeadStyle}"
+                               Margin="16,-4,16,16" />
+                    <Button x:Name="OfficialChoiceButton"
+                            Content="暂时只用官方 Codex"
+                            Tag="&#xE72E;"
+                            Style="{StaticResource OfficialButton}"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Padding="16,13"
+                            Click="OfficialChoiceButton_Click" />
+                </StackPanel>
+            </Grid>
+
+            <Grid x:Name="SuiXiangLoginPanel" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <TextBlock x:Name="SuiXiangLoginTitleText"
+                           Text="登录随想"
+                           FontSize="22"
+                           FontWeight="SemiBold" />
+                <TextBlock x:Name="SuiXiangLoginDescriptionText"
+                           Grid.Row="1"
+                           Text="请自行完成登录和腾讯验证码。登录不会自动导入 API Key；这个页面由随想提供，本程序不会读取密码、验证码或 Cookie。"
+                           Style="{StaticResource PageLeadStyle}"
+                           Margin="0,7,0,14" />
+                <Border Grid.Row="2"
+                        Background="{DynamicResource SurfaceBrush}"
+                        BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                    <Grid>
+                        <wv2:WebView2 x:Name="SuiXiangWebView" />
+                        <TextBlock x:Name="WebViewStatusText"
+                                   Text="正在准备登录窗口…"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+                </Border>
+                <DockPanel Grid.Row="3" Margin="0,16,0,0">
+                    <Button x:Name="SuiXiangBackButton"
+                            Content="返回"
+                            Tag="&#xE72B;"
+                            Style="{StaticResource SecondaryButton}"
+                            DockPanel.Dock="Left"
+                            Click="SuiXiangBackButton_Click" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button x:Name="SuiXiangRefreshButton"
+                                Content="刷新"
+                                Tag="&#xE72C;"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,8,0"
+                                Click="SuiXiangRefreshButton_Click" />
+                        <Button x:Name="ClearSuiXiangLoginButton"
+                                Content="清除登录数据"
+                                Tag="&#xE74D;"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="0,0,8,0"
+                                Click="ClearSuiXiangLoginButton_Click" />
+                        <Button x:Name="SuiXiangContinueButton"
+                                Content="继续填写 API Key"
+                                Tag="&#xE72A;"
+                                Style="{StaticResource PrimaryButton}"
+                                Click="SuiXiangContinueButton_Click" />
+                    </StackPanel>
+                </DockPanel>
+            </Grid>
+
+            <Grid x:Name="ProviderDetailsPanel" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <TextBlock x:Name="ProviderDetailsTitleText"
+                           Text="连接服务"
+                           FontSize="22"
+                           FontWeight="SemiBold" />
+                <TextBlock x:Name="ProviderDetailsDescriptionText"
+                           Grid.Row="1"
+                           Text="连接前会先做一次 Responses API 测试，失败时不会切换当前线路。"
+                           Style="{StaticResource PageLeadStyle}"
+                           Margin="0,7,0,18" />
+                <Grid Grid.Row="2" Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="130" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="ProviderNameLabelText"
+                               Text="显示名称"
+                               Style="{StaticResource FieldLabelStyle}" />
+                    <TextBox x:Name="ProviderNameTextBox"
+                             Grid.Column="1" />
+                </Grid>
+                <Grid Grid.Row="3" Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="130" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="WizardBaseUrlLabelText"
+                               Text="Base URL"
+                               Style="{StaticResource FieldLabelStyle}" />
+                    <TextBox x:Name="WizardBaseUrlTextBox"
+                             Grid.Column="1"
+                             AutomationProperties.LabeledBy="{Binding ElementName=WizardBaseUrlLabelText}" />
+                </Grid>
+                <Grid Grid.Row="4" Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="130" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="WizardModelLabelText"
+                               Text="模型"
+                               Style="{StaticResource FieldLabelStyle}" />
+                    <TextBox x:Name="WizardModelTextBox"
+                             Grid.Column="1"
+                             AutomationProperties.LabeledBy="{Binding ElementName=WizardModelLabelText}" />
+                </Grid>
+                <Grid Grid.Row="5">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="130" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="WizardApiKeyLabelText"
+                               Text="新的 API Key"
+                               Style="{StaticResource FieldLabelStyle}"
+                               VerticalAlignment="Top"
+                               Margin="0,10,0,0" />
+                    <StackPanel Grid.Column="1">
+                        <PasswordBox x:Name="WizardApiKeyPasswordBox"
+                                     AutomationProperties.LabeledBy="{Binding ElementName=WizardApiKeyLabelText}" />
+                        <TextBlock x:Name="WizardApiKeyHintText"
+                                   Text="密钥只会保存到 Windows 凭据管理器。"
+                                   Style="{StaticResource PageLeadStyle}"
+                                   Margin="0,7,0,0" />
+                    </StackPanel>
+                </Grid>
+                <DockPanel Grid.Row="6" Margin="0,18,0,0">
+                    <Button x:Name="ProviderDetailsBackButton"
+                            Content="返回"
+                            Tag="&#xE72B;"
+                            Style="{StaticResource SecondaryButton}"
+                            DockPanel.Dock="Left"
+                            Click="ProviderDetailsBackButton_Click" />
+                    <Button x:Name="ConnectProviderButton"
+                            Content="连接并切换"
+                            Tag="&#xE8AB;"
+                            Style="{StaticResource PrimaryButton}"
+                            HorizontalAlignment="Right"
+                            Click="ConnectProviderButton_Click" />
+                </DockPanel>
+            </Grid>
+        </Grid>
+
+        <Border Grid.Row="2"
+                Background="{DynamicResource StatusBarBrush}"
+                BorderBrush="{DynamicResource BorderBrush}"
+                BorderThickness="0,1,0,0">
+            <Grid Margin="26,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="WizardStatusText"
+                           Text="聊天记录和官方登录不会被删除。"
+                           Foreground="{DynamicResource MutedTextBrush}"
+                           FontSize="11"
+                           VerticalAlignment="Center" />
+                <Button x:Name="CancelWizardButton"
+                        Grid.Column="1"
+                        Content="稍后再说"
+                        Style="{StaticResource SecondaryButton}"
+                        Padding="10,5"
+                        VerticalAlignment="Center"
+                        Click="CancelWizardButton_Click" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

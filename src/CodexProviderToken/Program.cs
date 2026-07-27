@@ -1,13 +1,27 @@
 using CodexProviderSwitcher.Core;
 
-var target = AppPaths.CredentialTarget;
-for (var index = 0; index < args.Length - 1; index++)
+var target = AppPaths.LegacySuiXiangCredentialTarget;
+var credentialTargetSpecified = false;
+for (var index = 0; index < args.Length; index++)
 {
     if (args[index].Equals("--credential-target", StringComparison.Ordinal))
     {
+        if (credentialTargetSpecified || index + 1 >= args.Length)
+        {
+            Console.Error.WriteLine("Credential target argument is invalid.");
+            return 3;
+        }
+
         target = args[index + 1];
-        break;
+        credentialTargetSpecified = true;
+        index++;
     }
+}
+
+if (!CredentialTargetFactory.IsValid(target))
+{
+    Console.Error.WriteLine("Credential target is not managed by Codex Provider Switcher.");
+    return 3;
 }
 
 try

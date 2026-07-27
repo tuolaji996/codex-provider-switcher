@@ -20,6 +20,7 @@ $stageDirectory = Join-Path $programsRoot "CodexProviderSwitcher.installing-$ope
 $previousDirectory = Join-Path $programsRoot "CodexProviderSwitcher.previous-$operationId"
 $appSource = Join-Path $PublishDirectory "CodexProviderSwitcher.exe"
 $brokerSource = Join-Path $PublishDirectory "CodexProviderToken.exe"
+$webViewLoaderSource = Join-Path $PublishDirectory "WebView2Loader.dll"
 
 if (-not (Test-Path -LiteralPath $appSource)) {
     throw "Published GUI was not found: $appSource"
@@ -27,6 +28,10 @@ if (-not (Test-Path -LiteralPath $appSource)) {
 
 if (-not (Test-Path -LiteralPath $brokerSource)) {
     throw "Published token broker was not found: $brokerSource"
+}
+
+if (-not (Test-Path -LiteralPath $webViewLoaderSource)) {
+    throw "Published WebView2 loader was not found: $webViewLoaderSource"
 }
 
 New-Item -ItemType Directory -Path $programsRoot -Force | Out-Null
@@ -39,7 +44,8 @@ try {
         -Force
 
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "CodexProviderSwitcher.exe")) -or
-        -not (Test-Path -LiteralPath (Join-Path $stageDirectory "CodexProviderToken.exe"))) {
+        -not (Test-Path -LiteralPath (Join-Path $stageDirectory "CodexProviderToken.exe")) -or
+        -not (Test-Path -LiteralPath (Join-Path $stageDirectory "WebView2Loader.dll"))) {
         throw "The staged installation is incomplete."
     }
 }

@@ -33,6 +33,13 @@ public sealed partial class ConfigService
         var block = ReadSection(text, $"model_providers.{AppPaths.StableProviderId}");
         var baseUrl = block is null ? null : ReadStringValue(block, "base_url");
         var officialAuth = block is not null && ReadBooleanValue(block, "requires_openai_auth");
+        var authBlock = ReadSection(
+            text,
+            $"model_providers.{AppPaths.StableProviderId}.auth");
+        var credentialTarget =
+            !officialAuth && !string.IsNullOrWhiteSpace(baseUrl)
+                ? ReadCredentialTarget(authBlock)
+                : null;
 
         var mode = provider == AppPaths.StableProviderId
             ? officialAuth && string.IsNullOrWhiteSpace(baseUrl)
@@ -42,7 +49,14 @@ public sealed partial class ConfigService
                     : ProviderMode.Unknown
             : ProviderMode.Unknown;
 
-        return new ConfigStatus(mode, provider, model, reviewModel, baseUrl, officialAuth);
+        return new ConfigStatus(
+            mode,
+            provider,
+            model,
+            reviewModel,
+            baseUrl,
+            officialAuth,
+            credentialTarget);
     }
 
     public string BuildOfficialConfig(
@@ -70,9 +84,23 @@ public sealed partial class ConfigService
         string model,
         string baseUrl,
         string tokenBrokerWindowsPath)
+        => BuildThirdPartyConfig(
+            original,
+            model,
+            baseUrl,
+            tokenBrokerWindowsPath,
+            AppPaths.LegacySuiXiangCredentialTarget);
+
+    public string BuildThirdPartyConfig(
+        string original,
+        string model,
+        string baseUrl,
+        string tokenBrokerWindowsPath,
+        string credentialTarget)
     {
         var normalizedBaseUrl = NormalizeBaseUrl(baseUrl);
         var brokerWslPath = ToWslPath(tokenBrokerWindowsPath);
+        credentialTarget = CredentialTargetFactory.RequireValid(credentialTarget);
         var managedBlock = $"""
             {ManagedComment}
             [model_providers.{AppPaths.StableProviderId}]
@@ -82,7 +110,7 @@ public sealed partial class ConfigService
 
             [model_providers.{AppPaths.StableProviderId}.auth]
             command = "{EscapeToml(brokerWslPath)}"
-            args = []
+            args = ["--credential-target", "{EscapeToml(credentialTarget)}"]
             timeout_ms = 5000
             refresh_interval_ms = 0
             """;
@@ -331,6 +359,32 @@ public sealed partial class ConfigService
         return bool.TryParse(value, out var parsed) && parsed;
     }
 
+    private static string? ReadCredentialTarget(string? authBlock)
+    {
+        if (string.IsNullOrWhiteSpace(authBlock))
+        {
+            return AppPaths.LegacySuiXiangCredentialTarget;
+        }
+
+        var line = authBlock
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n')
+            .FirstOrDefault(candidate => IsAssignment(candidate, "args"));
+        if (line is null || line.Contains("[]", StringComparison.Ordinal))
+        {
+            return AppPaths.LegacySuiXiangCredentialTarget;
+        }
+
+        var match = CredentialTargetArgsRegex().Match(line);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        var target = Regex.Unescape(match.Groups[1].Value);
+        return CredentialTargetFactory.IsValid(target) ? target : null;
+    }
+
     private static string? ReadStringFromAssignment(string line)
     {
         var equals = line.IndexOf('=');
@@ -378,4 +432,8 @@ public sealed partial class ConfigService
 
     [GeneratedRegex("^\"((?:\\\\.|[^\"])*)\"")]
     private static partial Regex TomlStringRegex();
+
+    [GeneratedRegex(
+        "^\\s*args\\s*=\\s*\\[\\s*\"--credential-target\"\\s*,\\s*\"((?:\\\\.|[^\"])*)\"\\s*\\]\\s*$")]
+    private static partial Regex CredentialTargetArgsRegex();
 }

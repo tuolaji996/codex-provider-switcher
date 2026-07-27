@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = "1.3.0",
+    [string]$Version = "1.3.1",
     [string]$DotNet = "dotnet"
 )
 
@@ -42,6 +42,7 @@ Copy-Item `
 foreach ($requiredFile in @(
     "CodexProviderSwitcher.exe",
     "CodexProviderToken.exe",
+    "WebView2Loader.dll",
     "install.ps1",
     "README.md",
     "CHANGELOG.md",
