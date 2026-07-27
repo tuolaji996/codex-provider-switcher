@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-07-26
+
 ### Added
 
 - A six-step first-run guide with an explicit read-only environment check and a
