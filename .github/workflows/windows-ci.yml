@@ -1,0 +1,66 @@
+name: Windows CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-verify:
+    name: Build, publish, and verify
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Validate bilingual coverage
+        shell: pwsh
+        run: ./tools/validate-localization.ps1
+
+      - name: Scan repository for secrets
+        shell: pwsh
+        run: ./tools/scan-secrets.ps1
+
+      - name: Publish and run self-tests
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: Validate publish output
+        shell: pwsh
+        run: |
+          $requiredFiles = @(
+            "artifacts/publish/CodexProviderSwitcher.exe",
+            "artifacts/publish/CodexProviderToken.exe",
+            "artifacts/publish/WebView2Loader.dll"
+          )
+
+          foreach ($requiredFile in $requiredFiles) {
+            if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+              throw "Publish output is missing $requiredFile."
+            }
+          }
+
+          Write-Host "Validated $($requiredFiles.Count) required publish files."
