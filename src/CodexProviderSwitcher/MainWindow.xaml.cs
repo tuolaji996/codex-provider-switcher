@@ -37,6 +37,7 @@ public partial class MainWindow : Window
     private readonly ConnectionTestService _connectionTestService = new();
     private readonly HostCapabilityDiagnosticsService _hostDiagnosticsService = new();
     private readonly CodexProcessService _processService = new();
+    private readonly LunaWorkerAgentService _lunaWorkerAgentService = new();
     private SwitcherSettings _settings = new();
     private SettingsLoadResult? _settingsLoadResult;
     private bool _isBusy;
@@ -45,6 +46,7 @@ public partial class MainWindow : Window
     private AppPage _currentPage = AppPage.Home;
     private HostCapabilityDiagnostics? _lastHostDiagnostics;
     private ConfigStatus? _lastConfigStatus;
+    private ManagedAgentStatus? _lunaWorkerAgentStatus;
 
     public MainWindow()
     {
@@ -74,6 +76,7 @@ public partial class MainWindow : Window
             ThemeManager.Apply(_settings.UiTheme);
             ApplyLanguage();
             UpdateVersionText();
+            RefreshLunaWorkerAgentStatus();
             BaseUrlTextBox.Text = _settings.ThirdPartyBaseUrl;
             ModelTextBox.Text = _settings.ThirdPartyModel;
             RestartCheckBox.IsChecked = _settings.RestartAfterSwitch;
@@ -286,6 +289,99 @@ public partial class MainWindow : Window
     private async void RunSetupAgainButton_Click(object sender, RoutedEventArgs e)
     {
         await RunSetupWizardAsync();
+    }
+
+    private async void InstallLunaWorkerButton_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        await RunBusyAsync(() =>
+        {
+            var status = _lunaWorkerAgentService.Install();
+            _lunaWorkerAgentStatus = status;
+            UpdateLunaWorkerAgentStatus();
+            OperationStatusText.Text = status.State switch
+            {
+                ManagedAgentState.Installed => T(
+                    "Luna 任务 Agent 已安装；如 Codex 尚未识别，请重启 Codex。",
+                    "Luna task agent is installed. Restart Codex if it is not recognized yet."),
+                ManagedAgentState.Conflict => T(
+                    "检测到同名自定义 Luna Agent，未覆盖。",
+                    "A custom Luna agent already exists; it was not overwritten."),
+                _ => T(
+                    "Luna 任务 Agent 尚未安装。",
+                    "The Luna task agent is not installed.")
+            };
+            return Task.CompletedTask;
+        });
+    }
+
+    private void OpenLunaAgentsFolderButton_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        OpenFolder(AppPaths.AgentsDirectory);
+        OperationStatusText.Text = T(
+            "已打开 Codex agents 文件夹。",
+            "Opened the Codex agents folder.");
+    }
+
+    private void RefreshLunaWorkerAgentStatus()
+    {
+        _lunaWorkerAgentStatus = _lunaWorkerAgentService.Inspect();
+        UpdateLunaWorkerAgentStatus();
+    }
+
+    private void UpdateLunaWorkerAgentStatus()
+    {
+        var status = _lunaWorkerAgentStatus;
+        if (status is null)
+        {
+            LunaWorkerStatusText.Text = T("正在检测…", "Checking…");
+            InstallLunaWorkerButton.Content = T(
+                "安装 Luna Agent",
+                "Install Luna agent");
+            InstallLunaWorkerButton.IsEnabled = false;
+            OpenLunaAgentsFolderButton.IsEnabled = !_isBusy;
+            return;
+        }
+
+        LunaWorkerStatusText.Text = status.State switch
+        {
+            ManagedAgentState.Installed => T(
+                "已安装（gpt-5.6-luna / max）",
+                "Installed (gpt-5.6-luna / max)"),
+            ManagedAgentState.Conflict => T(
+                "已有自定义文件，未覆盖",
+                "Custom file found; not overwritten"),
+            _ => T(
+                "未安装（可选）",
+                "Not installed (optional)")
+        };
+        InstallLunaWorkerButton.Content = status.State switch
+        {
+            ManagedAgentState.Installed => T("已安装", "Installed"),
+            ManagedAgentState.Conflict => T("已有自定义文件", "Custom file found"),
+            _ => T("安装 Luna Agent", "Install Luna agent")
+        };
+        InstallLunaWorkerButton.ToolTip = status.State switch
+        {
+            ManagedAgentState.Installed => T(
+                "Luna 任务 Agent 已存在，无需重复安装。",
+                "The Luna task agent is already installed."),
+            ManagedAgentState.Conflict => T(
+                "为保护现有配置，不会覆盖同名自定义文件。",
+                "The existing custom file will not be overwritten."),
+            _ => T(
+                "安装 gpt-5.6-luna、max 的 Luna 任务 Agent。",
+                "Install the gpt-5.6-luna, max Luna task agent.")
+        };
+        OpenLunaAgentsFolderButton.ToolTip = T(
+            "打开 Codex agents 文件夹查看配置。",
+            "Open the Codex agents folder to inspect the configuration.");
+        InstallLunaWorkerButton.IsEnabled =
+            !_isBusy && status.State == ManagedAgentState.Missing;
+        OpenLunaAgentsFolderButton.IsEnabled = !_isBusy;
     }
 
     private async Task RunSetupWizardAsync()
@@ -657,6 +753,7 @@ public partial class MainWindow : Window
 
             Localizer.Use(language);
             ApplyLanguage();
+            RefreshLunaWorkerAgentStatus();
             UpdatePersistedProviderCapabilityStatuses();
             RefreshBackups();
             await RefreshStatusAsync();
@@ -1666,6 +1763,9 @@ public partial class MainWindow : Window
         OpenDataFolderButton.IsEnabled = !busy;
         OpenGitHubButton.IsEnabled = !busy;
         RunSetupAgainButton.IsEnabled = !busy;
+        InstallLunaWorkerButton.IsEnabled =
+            !busy && _lunaWorkerAgentStatus?.State == ManagedAgentState.Missing;
+        OpenLunaAgentsFolderButton.IsEnabled = !busy;
         BusyProgressBar.Visibility =
             busy ? Visibility.Visible : Visibility.Collapsed;
         Cursor = busy ? System.Windows.Input.Cursors.Wait : null;
@@ -1814,6 +1914,12 @@ public partial class MainWindow : Window
         RunSetupAgainButton.ToolTip = T(
             "重新运行首次设置向导",
             "Run the first-time setup wizard again");
+        LunaWorkerTitleText.Text = T(
+            "Luna 任务 Agent",
+            "Luna task agent");
+        LunaWorkerDescriptionText.Text = T(
+            "可选安装 Luna 任务 Agent（gpt-5.6-luna / max）；不切换线路或改动聊天记录。第三方线路需支持该模型。",
+            "Optionally install the Luna task agent (gpt-5.6-luna / max). It does not switch routes or change chat history; third-party routes must support this model.");
         LanguageSettingTitleText.Text = T("界面语言", "Interface language");
         LanguageSettingDescriptionText.Text = T(
             "选择中文或英文。",
@@ -1830,12 +1936,16 @@ public partial class MainWindow : Window
             "设置、诊断和备份保存在本机 LocalAppData。",
             "Settings, diagnostics, and backups are stored in local AppData.");
         OpenDataFolderButton.Content = T("打开数据目录", "Open data folder");
+        OpenLunaAgentsFolderButton.Content = T(
+            "打开 agents 文件夹",
+            "Open agents folder");
 
         ChineseLanguageButton.ToolTip = T("切换到中文", "Switch to Chinese");
         EnglishLanguageButton.ToolTip = T("切换到英文", "Switch to English");
         LightThemeButton.ToolTip = T("使用浅色外观", "Use light appearance");
         DarkThemeButton.ToolTip = T("使用深色外观", "Use dark appearance");
         SystemThemeButton.ToolTip = T("跟随 Windows 外观", "Follow Windows appearance");
+        UpdateLunaWorkerAgentStatus();
         UpdateLanguageButtons();
         UpdateThemeButtons();
         UpdatePageTitle();
@@ -1852,7 +1962,7 @@ public partial class MainWindow : Window
     {
         var version = typeof(MainWindow).Assembly.GetName().Version;
         var displayVersion = version is null
-            ? "1.3.2"
+            ? "1.3.3"
             : $"{version.Major}.{version.Minor}.{version.Build}";
         VersionText.Text = $"v{displayVersion}";
         SettingsVersionText.Text = $"Codex Provider Switcher v{displayVersion}";

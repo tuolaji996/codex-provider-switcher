@@ -769,6 +769,101 @@ finally
     Directory.Delete(temporaryCodexHome, true);
 }
 
+var lunaWorkerRoot = Path.Combine(
+    Path.GetTempPath(),
+    $"codex-provider-switcher-luna-worker-test-{Guid.NewGuid():N}");
+var previousLunaWorkerCodexHome = Environment.GetEnvironmentVariable("CODEX_HOME");
+try
+{
+    Environment.SetEnvironmentVariable("CODEX_HOME", lunaWorkerRoot);
+    var lunaWorkerService = new LunaWorkerAgentService();
+    var missingLunaWorker = lunaWorkerService.Inspect();
+    Check(
+        missingLunaWorker.State == ManagedAgentState.Missing &&
+        missingLunaWorker.Path == Path.Combine(
+            lunaWorkerRoot,
+            "agents",
+            LunaWorkerAgentService.AgentFileName),
+        "A missing Luna worker agent was not detected under CODEX_HOME.");
+
+    var configPath = Path.Combine(lunaWorkerRoot, "config.toml");
+    const string configFixture = "model = \"preserve-me\"\n";
+    Directory.CreateDirectory(lunaWorkerRoot);
+    File.WriteAllText(configPath, configFixture);
+    var unrelatedAgentPath = Path.Combine(
+        lunaWorkerRoot,
+        "agents",
+        "unrelated.toml");
+    Directory.CreateDirectory(Path.GetDirectoryName(unrelatedAgentPath)!);
+    const string unrelatedAgentFixture = "name = \"keep-me\"\n";
+    File.WriteAllText(unrelatedAgentPath, unrelatedAgentFixture);
+
+    var installedLunaWorker = lunaWorkerService.Install();
+    var lunaWorkerPath = installedLunaWorker.Path;
+    Check(
+        installedLunaWorker.State == ManagedAgentState.Installed &&
+        File.ReadAllText(lunaWorkerPath) == LunaWorkerAgentService.Template,
+        "Installing the missing Luna worker did not write the exact template.");
+    Check(
+        File.ReadAllText(configPath) == configFixture,
+        "Installing the Luna worker changed config.toml.");
+    Check(
+        File.ReadAllText(unrelatedAgentPath) == unrelatedAgentFixture,
+        "Installing the Luna worker changed an unrelated agent file.");
+    Check(
+        LunaWorkerAgentService.Template.Contains(
+            "name = \"luna_worker\"",
+            StringComparison.Ordinal) &&
+        LunaWorkerAgentService.Template.Contains(
+            "description = \"Preferred agent for well-scoped",
+            StringComparison.Ordinal) &&
+        LunaWorkerAgentService.Template.Contains(
+            "model = \"gpt-5.6-luna\"",
+            StringComparison.Ordinal) &&
+        LunaWorkerAgentService.Template.Contains(
+            "model_reasoning_effort = \"max\"",
+            StringComparison.Ordinal) &&
+        LunaWorkerAgentService.Template.Contains(
+            "developer_instructions = \"\"\"",
+            StringComparison.Ordinal),
+        "The Luna worker template is missing a required agent field.");
+
+    var lineEndingVariant = LunaWorkerAgentService.Template
+        .Replace("\n", "\r\n", StringComparison.Ordinal)
+        .TrimEnd('\r', '\n');
+    File.WriteAllText(lunaWorkerPath, lineEndingVariant);
+    Check(
+        lunaWorkerService.Inspect().State == ManagedAgentState.Installed,
+        "Equivalent Luna worker line endings or final newline were not accepted.");
+    var normalizedExistingContent = File.ReadAllText(lunaWorkerPath);
+    var idempotentInstall = lunaWorkerService.Install();
+    Check(
+        idempotentInstall.State == ManagedAgentState.Installed &&
+        File.ReadAllText(lunaWorkerPath) == normalizedExistingContent,
+        "Reinstalling an existing Luna worker was not idempotent.");
+
+    const string conflictingLunaWorker = "name = \"user-owned-luna\"\n";
+    File.WriteAllText(lunaWorkerPath, conflictingLunaWorker);
+    Check(
+        lunaWorkerService.Inspect().State == ManagedAgentState.Conflict,
+        "A user-owned Luna worker file was not detected as a conflict.");
+    var conflictInstall = lunaWorkerService.Install();
+    Check(
+        conflictInstall.State == ManagedAgentState.Conflict,
+        "Installing a conflicting Luna worker did not return the conflict state.");
+    Check(
+        File.ReadAllText(lunaWorkerPath) == conflictingLunaWorker,
+        "A conflicting Luna worker file was modified during install.");
+}
+finally
+{
+    Environment.SetEnvironmentVariable("CODEX_HOME", previousLunaWorkerCodexHome);
+    if (Directory.Exists(lunaWorkerRoot))
+    {
+        Directory.Delete(lunaWorkerRoot, true);
+    }
+}
+
 var testTarget = CredentialTargetFactory.CreateForProfileId(Guid.NewGuid().ToString("N"));
 var testSecret = $"test-{Guid.NewGuid():N}";
 try

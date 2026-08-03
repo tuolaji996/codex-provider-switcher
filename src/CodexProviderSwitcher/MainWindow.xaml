@@ -132,7 +132,7 @@
                                    VerticalAlignment="Center" />
                         <TextBlock x:Name="VersionText"
                                    Grid.Column="2"
-                                   Text="v1.3.2"
+                                   Text="v1.3.3"
                                    Foreground="{DynamicResource SubtleTextBrush}"
                                    FontSize="10"
                                    Margin="8,0,0,0"
@@ -844,6 +844,7 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <Grid Grid.Row="0" Margin="0,0,0,10">
@@ -987,7 +988,54 @@
                         </Grid>
                     </Border>
 
-                    <Grid Grid.Row="4" Margin="0,20,0,0">
+                    <Border Grid.Row="4"
+                            BorderBrush="{DynamicResource BorderBrush}"
+                            BorderThickness="0,0,0,1"
+                            Padding="0,16">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Margin="0,0,20,0">
+                                <TextBlock x:Name="LunaWorkerTitleText"
+                                           Text="Luna 任务 Agent"
+                                           FontWeight="SemiBold"
+                                           FontSize="13" />
+                                <TextBlock x:Name="LunaWorkerDescriptionText"
+                                           Text="可选安装 Luna 任务 Agent；不切换线路或改动聊天记录。第三方线路需支持 gpt-5.6-luna。"
+                                           Style="{StaticResource PageLeadStyle}"
+                                           Margin="0,2,0,0"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center">
+                                <TextBlock x:Name="LunaWorkerStatusText"
+                                           Text="正在检测…"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontSize="11"
+                                           HorizontalAlignment="Right"
+                                           Margin="0,0,0,6"
+                                           AutomationProperties.LiveSetting="Polite" />
+                                <WrapPanel HorizontalAlignment="Right">
+                                    <Button x:Name="InstallLunaWorkerButton"
+                                            Content="安装 Luna Agent"
+                                            Tag="&#xE896;"
+                                            Style="{StaticResource SecondaryButton}"
+                                            Margin="0,0,8,0"
+                                            Click="InstallLunaWorkerButton_Click" />
+                                    <Button x:Name="OpenLunaAgentsFolderButton"
+                                            Content="打开 agents 文件夹"
+                                            Tag="&#xE8B7;"
+                                            Style="{StaticResource SecondaryButton}"
+                                            Click="OpenLunaAgentsFolderButton_Click" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Grid Grid.Row="5" Margin="0,20,0,0">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
@@ -1002,7 +1050,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Margin="0,0,20,0">
                                 <TextBlock x:Name="SettingsVersionText"
-                                           Text="Codex Provider Switcher v1.3.2"
+                                           Text="Codex Provider Switcher v1.3.3"
                                            FontWeight="SemiBold"
                                            FontSize="13" />
                                 <TextBlock x:Name="SettingsStorageDescriptionText"
