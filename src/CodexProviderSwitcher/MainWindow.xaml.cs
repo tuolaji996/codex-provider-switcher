@@ -38,6 +38,7 @@ public partial class MainWindow : Window
     private readonly HostCapabilityDiagnosticsService _hostDiagnosticsService = new();
     private readonly CodexProcessService _processService = new();
     private readonly LunaWorkerAgentService _lunaWorkerAgentService = new();
+    private readonly GitHubReleaseUpdateService _releaseUpdateService = new();
     private SwitcherSettings _settings = new();
     private SettingsLoadResult? _settingsLoadResult;
     private bool _isBusy;
@@ -47,6 +48,10 @@ public partial class MainWindow : Window
     private HostCapabilityDiagnostics? _lastHostDiagnostics;
     private ConfigStatus? _lastConfigStatus;
     private ManagedAgentStatus? _lunaWorkerAgentStatus;
+    private ReleaseUpdateInfo? _releaseUpdateInfo;
+    private bool _updateCheckCompleted;
+    private bool _updateCheckFailed;
+    private bool _isCheckingForUpdates;
 
     public MainWindow()
     {
@@ -106,6 +111,8 @@ public partial class MainWindow : Window
             {
                 await RunSetupWizardAsync();
             }
+
+            _ = CheckForUpdatesAsync(isManual: false);
         }
         catch (Exception exception)
         {
@@ -382,6 +389,138 @@ public partial class MainWindow : Window
         InstallLunaWorkerButton.IsEnabled =
             !_isBusy && status.State == ManagedAgentState.Missing;
         OpenLunaAgentsFolderButton.IsEnabled = !_isBusy;
+    }
+
+    private async void UpdateActionButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_releaseUpdateInfo is { IsUpdateAvailable: true })
+        {
+            OpenLatestRelease();
+            return;
+        }
+
+        await CheckForUpdatesAsync(isManual: true);
+    }
+
+    private void OpenUpdateReleaseButton_Click(object sender, RoutedEventArgs e) =>
+        OpenLatestRelease();
+
+    private async Task CheckForUpdatesAsync(bool isManual)
+    {
+        if (_isCheckingForUpdates)
+        {
+            return;
+        }
+
+        _isCheckingForUpdates = true;
+        _updateCheckFailed = false;
+        UpdateUpdateCheckUi();
+        try
+        {
+            _releaseUpdateInfo = await _releaseUpdateService.CheckAsync(
+                CurrentApplicationVersion());
+            _updateCheckCompleted = true;
+            if (_releaseUpdateInfo.IsUpdateAvailable)
+            {
+                OperationStatusText.Text = F(
+                    "发现新版本 {0}，可从 GitHub 下载。",
+                    "Version {0} is available on GitHub.",
+                    _releaseUpdateInfo.LatestTag);
+            }
+            else if (isManual)
+            {
+                OperationStatusText.Text = T(
+                    "当前已经是最新版。",
+                    "You already have the latest version.");
+            }
+        }
+        catch (Exception)
+        {
+            _releaseUpdateInfo = null;
+            _updateCheckCompleted = true;
+            _updateCheckFailed = true;
+            if (isManual)
+            {
+                OperationStatusText.Text = T(
+                    "暂时无法检查 GitHub 更新，请稍后重试。",
+                    "Could not check GitHub for updates. Try again later.");
+            }
+        }
+        finally
+        {
+            _isCheckingForUpdates = false;
+            UpdateUpdateCheckUi();
+        }
+    }
+
+    private void OpenLatestRelease()
+    {
+        if (_releaseUpdateInfo is not { IsUpdateAvailable: true } update)
+        {
+            return;
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = update.ReleaseUri.AbsoluteUri,
+            UseShellExecute = true
+        });
+    }
+
+    private void UpdateUpdateCheckUi()
+    {
+        var update = _releaseUpdateInfo is { IsUpdateAvailable: true } candidate
+            ? candidate
+            : null;
+        var updateAvailable = update is not null;
+        UpdateAvailableBanner.Visibility =
+            updateAvailable ? Visibility.Visible : Visibility.Collapsed;
+
+        if (update is not null)
+        {
+            UpdateBannerTitleText.Text = F(
+                "发现新版本 {0}",
+                "Version {0} is available",
+                update.LatestTag);
+            UpdateBannerDescriptionText.Text = T(
+                "GitHub 已发布新的正式版本，打开下载页即可升级。",
+                "A new stable release is available on GitHub. Open the download page to upgrade.");
+        }
+
+        UpdateCheckStatusText.Text = _isCheckingForUpdates
+            ? T("正在检查 GitHub...", "Checking GitHub...")
+            : updateAvailable
+                ? F(
+                    "可更新到 {0}",
+                    "Update available: {0}",
+                    update!.LatestTag)
+                : _updateCheckFailed
+                    ? T("检查失败，可重试", "Check failed; retry available")
+                    : _updateCheckCompleted
+                        ? F(
+                            "已是最新版（v{0}）",
+                            "Up to date (v{0})",
+                            CurrentApplicationVersion().ToString(3))
+                        : T("等待自动检查", "Waiting for automatic check");
+        UpdateActionButton.Content = _isCheckingForUpdates
+            ? T("正在检查", "Checking")
+            : updateAvailable
+                ? T("打开下载页", "Open download page")
+                : T("立即检查", "Check now");
+        UpdateActionButton.Tag = updateAvailable ? "\uE895" : "\uE72C";
+        UpdateActionButton.ToolTip = updateAvailable
+            ? T(
+                "在浏览器中打开 GitHub Release 下载页",
+                "Open the GitHub Release download page in your browser")
+            : T(
+                "立即检查 GitHub 上的最新正式版本",
+                "Check GitHub for the latest stable release now");
+        OpenUpdateReleaseButton.Content = T("打开下载页", "Open download page");
+        OpenUpdateReleaseButton.ToolTip = T(
+            "在浏览器中打开 GitHub Release 下载页",
+            "Open the GitHub Release download page in your browser");
+        UpdateActionButton.IsEnabled = !_isBusy && !_isCheckingForUpdates;
+        OpenUpdateReleaseButton.IsEnabled = !_isBusy;
     }
 
     private async Task RunSetupWizardAsync()
@@ -1766,6 +1905,8 @@ public partial class MainWindow : Window
         InstallLunaWorkerButton.IsEnabled =
             !busy && _lunaWorkerAgentStatus?.State == ManagedAgentState.Missing;
         OpenLunaAgentsFolderButton.IsEnabled = !busy;
+        UpdateActionButton.IsEnabled = !busy && !_isCheckingForUpdates;
+        OpenUpdateReleaseButton.IsEnabled = !busy;
         BusyProgressBar.Visibility =
             busy ? Visibility.Visible : Visibility.Collapsed;
         Cursor = busy ? System.Windows.Input.Cursors.Wait : null;
@@ -1920,6 +2061,10 @@ public partial class MainWindow : Window
         LunaWorkerDescriptionText.Text = T(
             "可选安装 Luna 任务 Agent（gpt-5.6-luna / max）；不切换线路或改动聊天记录。第三方线路需支持该模型。",
             "Optionally install the Luna task agent (gpt-5.6-luna / max). It does not switch routes or change chat history; third-party routes must support this model.");
+        UpdateCheckTitleText.Text = T("应用更新", "Application updates");
+        UpdateCheckDescriptionText.Text = T(
+            "启动后自动检查 GitHub 最新正式版本；也可以随时手动检查。",
+            "Automatically check GitHub for the latest stable release at startup, or check manually at any time.");
         LanguageSettingTitleText.Text = T("界面语言", "Interface language");
         LanguageSettingDescriptionText.Text = T(
             "选择中文或英文。",
@@ -1946,6 +2091,7 @@ public partial class MainWindow : Window
         DarkThemeButton.ToolTip = T("使用深色外观", "Use dark appearance");
         SystemThemeButton.ToolTip = T("跟随 Windows 外观", "Follow Windows appearance");
         UpdateLunaWorkerAgentStatus();
+        UpdateUpdateCheckUi();
         UpdateLanguageButtons();
         UpdateThemeButtons();
         UpdatePageTitle();
@@ -1960,13 +2106,14 @@ public partial class MainWindow : Window
 
     private void UpdateVersionText()
     {
-        var version = typeof(MainWindow).Assembly.GetName().Version;
-        var displayVersion = version is null
-            ? "1.3.3"
-            : $"{version.Major}.{version.Minor}.{version.Build}";
+        var displayVersion = CurrentApplicationVersion().ToString(3);
         VersionText.Text = $"v{displayVersion}";
         SettingsVersionText.Text = $"Codex Provider Switcher v{displayVersion}";
     }
+
+    private static Version CurrentApplicationVersion() =>
+        GitHubReleaseUpdateService.NormalizeVersion(
+            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 3, 4));
 
     private Brush ResourceBrush(string key) =>
         (Brush)FindResource(key);

@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net;
+using System.Text;
 using System.Text.Json;
 using CodexProviderSwitcher.Core;
 
@@ -39,6 +41,83 @@ Check(
 Check(
     ThemePreference.NormalizeCode("unsupported") == ThemePreference.LightCode,
     "An unsupported theme did not fall back to light.");
+
+var updateHandler = new StubHttpMessageHandler(
+    HttpStatusCode.OK,
+    """
+    {
+      "tag_name": "v1.3.5",
+      "html_url": "https://malicious.example/not-used"
+    }
+    """);
+using var updateClient = new HttpClient(updateHandler);
+var updateService = new GitHubReleaseUpdateService(updateClient);
+var availableUpdate = await updateService.CheckAsync(new Version(1, 3, 4, 0));
+Check(availableUpdate.IsUpdateAvailable, "A newer GitHub release was not detected.");
+Check(
+    availableUpdate.CurrentVersion == new Version(1, 3, 4) &&
+    availableUpdate.LatestVersion == new Version(1, 3, 5) &&
+    availableUpdate.LatestTag == "v1.3.5",
+    "The GitHub release versions were not normalized correctly.");
+Check(
+    availableUpdate.ReleaseUri == new Uri(
+        "https://github.com/tuolaji996/codex-provider-switcher/releases/tag/v1.3.5"),
+    "The update link did not stay on the managed GitHub repository.");
+Check(
+    updateHandler.RequestUri == new Uri(
+        GitHubReleaseUpdateService.LatestReleaseApiUrl) &&
+    updateHandler.Accept == "application/vnd.github+json" &&
+    updateHandler.ApiVersion == "2026-03-10" &&
+    !updateHandler.HasAuthorization &&
+    updateHandler.UserAgent.Contains(
+        "CodexProviderSwitcher/1.3.4",
+        StringComparison.Ordinal),
+    "The GitHub latest-release request is missing required API headers.");
+
+var currentReleaseService = new GitHubReleaseUpdateService(
+    new HttpClient(new StubHttpMessageHandler(
+        HttpStatusCode.OK,
+        "{\"tag_name\":\"v1.3.4\"}")));
+Check(
+    !(await currentReleaseService.CheckAsync(new Version(1, 3, 4))).IsUpdateAvailable,
+    "The current release was incorrectly reported as an update.");
+var olderReleaseService = new GitHubReleaseUpdateService(
+    new HttpClient(new StubHttpMessageHandler(
+        HttpStatusCode.OK,
+        "{\"tag_name\":\"v1.3.3\"}")));
+Check(
+    !(await olderReleaseService.CheckAsync(new Version(1, 3, 4))).IsUpdateAvailable,
+    "An older release was incorrectly reported as an update.");
+
+var invalidReleaseRejected = false;
+try
+{
+    var invalidReleaseService = new GitHubReleaseUpdateService(
+        new HttpClient(new StubHttpMessageHandler(
+            HttpStatusCode.OK,
+            "{\"tag_name\":\"nightly-latest\"}")));
+    await invalidReleaseService.CheckAsync(new Version(1, 3, 4));
+}
+catch (InvalidDataException)
+{
+    invalidReleaseRejected = true;
+}
+Check(invalidReleaseRejected, "An invalid GitHub release tag was accepted.");
+
+var failedReleaseRequestRejected = false;
+try
+{
+    var failedReleaseService = new GitHubReleaseUpdateService(
+        new HttpClient(new StubHttpMessageHandler(
+            HttpStatusCode.Forbidden,
+            "{\"message\":\"rate limited\"}")));
+    await failedReleaseService.CheckAsync(new Version(1, 3, 4));
+}
+catch (HttpRequestException)
+{
+    failedReleaseRequestRejected = true;
+}
+Check(failedReleaseRequestRejected, "A failed GitHub release request was accepted.");
 
 var embeddedNavigationCases = new[]
 {
@@ -1131,3 +1210,41 @@ if (failures.Count > 0)
 
 Console.WriteLine("All self-tests passed.");
 return 0;
+
+sealed class StubHttpMessageHandler(
+    HttpStatusCode statusCode,
+    string responseBody) : HttpMessageHandler
+{
+    public Uri? RequestUri { get; private set; }
+
+    public string Accept { get; private set; } = string.Empty;
+
+    public string ApiVersion { get; private set; } = string.Empty;
+
+    public bool HasAuthorization { get; private set; }
+
+    public string UserAgent { get; private set; } = string.Empty;
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        RequestUri = request.RequestUri;
+        Accept = string.Join(",", request.Headers.Accept.Select(value => value.MediaType));
+        ApiVersion = request.Headers.TryGetValues(
+            "X-GitHub-Api-Version",
+            out var versions)
+            ? string.Join(",", versions)
+            : string.Empty;
+        HasAuthorization = request.Headers.Authorization is not null;
+        UserAgent = request.Headers.UserAgent.ToString();
+        return Task.FromResult(new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(
+                responseBody,
+                Encoding.UTF8,
+                "application/json"),
+            RequestMessage = request
+        });
+    }
+}
