@@ -28,6 +28,11 @@ public static class AppPaths
 
     public static string ConfigPath => Path.Combine(CodexHome, "config.toml");
 
+    public static string AgentsDirectory => Path.Combine(CodexHome, "agents");
+
+    public static string LunaWorkerAgentPath =>
+        Path.Combine(AgentsDirectory, "luna-worker.toml");
+
     public static string LocalDataRoot =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

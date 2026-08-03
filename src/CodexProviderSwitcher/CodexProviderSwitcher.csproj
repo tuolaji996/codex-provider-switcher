@@ -6,7 +6,7 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <AssemblyName>CodexProviderSwitcher</AssemblyName>
     <RootNamespace>CodexProviderSwitcher</RootNamespace>
-    <Version>1.3.2</Version>
+    <Version>1.3.3</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <DebugType>none</DebugType>

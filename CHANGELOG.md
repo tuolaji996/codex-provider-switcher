@@ -4,6 +4,27 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-08-02
+
+### Added
+
+- An optional bilingual Settings action that installs the scoped
+  `luna_worker` task-agent definition with `gpt-5.6-luna` and maximum reasoning.
+- Managed-state detection for a missing, installed, or conflicting
+  `%CODEX_HOME%\agents\luna-worker.toml` file.
+
+### Safety
+
+- Installing the Luna task agent does not edit Codex `config.toml`, switch the
+  active provider, alter official authentication, or rewrite chat history.
+- A different existing `luna-worker.toml` is reported as a conflict and is never
+  overwritten; unrelated agent definitions are left untouched.
+
+### Boundaries
+
+- Third-party routes must expose `gpt-5.6-luna` for this task agent to work.
+  The switcher does not substitute another model when that model is unavailable.
+
 ## [1.3.2] - 2026-07-26
 
 ### Added
