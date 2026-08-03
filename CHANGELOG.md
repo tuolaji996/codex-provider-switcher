@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-08-02
+
+### Added
+
+- A background startup check for the repository's latest stable GitHub Release.
+- A bilingual Home update notice and a Settings status with manual retry.
+- Offline response tests for newer, current, older, malformed, and failed
+  GitHub release checks.
+
+### Safety
+
+- Update checks use the public GitHub API without credentials and never block
+  startup, Provider switching, official authentication, or chat history.
+- Release links are constructed for this repository instead of trusting an
+  arbitrary URL returned in the API response.
+- Updates are never downloaded or installed silently; the user opens the
+  trusted GitHub Release page and chooses the asset.
+
 ## [1.3.3] - 2026-08-02
 
 ### Added

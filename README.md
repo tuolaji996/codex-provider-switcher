@@ -64,7 +64,7 @@ history, and backups are not removed.
 
 ## Interface
 
-Version 1.3.3 uses a compact native Windows workspace:
+Version 1.3.4 uses a compact native Windows workspace:
 
 - **Home:** current route, shared-history health, and quick switching.
 - **Providers:** official OpenAI and third-party endpoint, model, and key
@@ -73,10 +73,22 @@ Version 1.3.3 uses a compact native Windows workspace:
   Mobile Remote prerequisites.
 - **Backups:** a read-only table of every timestamped `config.toml` backup.
 - **Settings:** language, appearance, restart behavior, optional Luna task agent,
-  and local data access.
+  automatic update status, and local data access.
 
 The navigation pane collapses to icons at narrow window sizes. All operational
 status remains visible in the bottom status bar.
+
+## Automatic update checks
+
+The application checks the repository's latest stable GitHub Release in the
+background after startup. When a newer version is available, Home shows a
+compact notice that opens the trusted release page. Settings also shows the
+current update status and provides a manual **Check now** action.
+
+The check uses GitHub's public latest-release API and does not require a GitHub
+account or token. A network or rate-limit failure does not block startup or
+provider switching. The application never downloads or installs an update
+silently; the user chooses the release asset from GitHub.
 
 ## Safety model
 
@@ -176,7 +188,7 @@ already included on the target machine. A .NET 8 SDK is needed only to build.
 To create the versioned ZIP and SHA-256 file used by GitHub Releases:
 
 ```powershell
-.\release.ps1 -Version 1.3.3 -DotNet "C:\path\to\dotnet.exe"
+.\release.ps1 -Version 1.3.4 -DotNet "C:\path\to\dotnet.exe"
 ```
 
 The installed files are placed in:
