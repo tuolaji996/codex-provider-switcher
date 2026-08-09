@@ -5,6 +5,8 @@ namespace CodexProviderSwitcher.Core;
 
 public sealed partial class ConfigService
 {
+    public const string SolUltraVisibilityKey = "show-ultra-in-model-picker-slider";
+
     private const string ManagedComment =
         "# Managed by Codex Provider Switcher. Keep this provider ID stable so all chats share one history.";
 
@@ -57,6 +59,79 @@ public sealed partial class ConfigService
             baseUrl,
             officialAuth,
             credentialTarget);
+    }
+
+    public bool ReadSolUltraVisibility(string? path = null)
+    {
+        path ??= AppPaths.ConfigPath;
+        return File.Exists(path) &&
+               ParseSolUltraVisibility(File.ReadAllText(path));
+    }
+
+    public bool ParseSolUltraVisibility(string text)
+    {
+        var desktopBlock = ReadSection(text, "desktop");
+        return desktopBlock is not null &&
+               ReadBooleanValue(desktopBlock, SolUltraVisibilityKey);
+    }
+
+    public string BuildSolUltraVisibilityConfig(string original, bool enabled) =>
+        UpsertSectionAssignment(
+            original,
+            "desktop",
+            SolUltraVisibilityKey,
+            enabled ? "true" : "false");
+
+    public string? SetSolUltraVisibility(bool enabled, string? configPath = null)
+    {
+        configPath ??= AppPaths.ConfigPath;
+        if (!File.Exists(configPath))
+        {
+            throw new FileNotFoundException(
+                Localizer.Text(
+                    "未找到 Codex config.toml。",
+                    "Codex config.toml was not found."),
+                configPath);
+        }
+
+        var original = File.ReadAllText(configPath);
+        if (ParseSolUltraVisibility(original) == enabled)
+        {
+            return null;
+        }
+
+        var backupFolder = CreateBackup(configPath);
+        var wroteConfig = false;
+        try
+        {
+            WriteConfig(BuildSolUltraVisibilityConfig(original, enabled), configPath);
+            wroteConfig = true;
+            if (ReadSolUltraVisibility(configPath) != enabled)
+            {
+                throw new InvalidOperationException(
+                    "Post-write verification failed for the Sol Ultra setting.");
+            }
+
+            return backupFolder;
+        }
+        catch (Exception exception) when (wroteConfig)
+        {
+            try
+            {
+                WriteConfig(original, configPath);
+            }
+            catch (Exception rollbackException)
+            {
+                throw new AggregateException(
+                    "The Sol Ultra update failed and the original configuration could not be restored.",
+                    exception,
+                    rollbackException);
+            }
+
+            throw new InvalidOperationException(
+                "The Sol Ultra update failed and the original configuration was restored.",
+                exception);
+        }
     }
 
     public string BuildOfficialConfig(
@@ -268,6 +343,61 @@ public sealed partial class ConfigService
         }
 
         lines.Insert(insertionIndex, $"{key} = {tomlValue}");
+    }
+
+    private static string UpsertSectionAssignment(
+        string original,
+        string sectionName,
+        string key,
+        string tomlValue)
+    {
+        var newline = original.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var lines = original
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n')
+            .ToList();
+        var sectionIndex = lines.FindIndex(line =>
+            string.Equals(ParseSectionName(line), sectionName, StringComparison.Ordinal));
+
+        if (sectionIndex >= 0)
+        {
+            var sectionEnd = sectionIndex + 1;
+            while (sectionEnd < lines.Count && ParseSectionName(lines[sectionEnd]) is null)
+            {
+                if (IsAssignment(lines[sectionEnd], key))
+                {
+                    lines[sectionEnd] = $"{key} = {tomlValue}";
+                    return string.Join(newline, lines);
+                }
+
+                sectionEnd++;
+            }
+
+            var insertionIndex = sectionEnd;
+            while (insertionIndex > sectionIndex + 1 &&
+                   string.IsNullOrWhiteSpace(lines[insertionIndex - 1]))
+            {
+                insertionIndex--;
+            }
+
+            lines.Insert(insertionIndex, $"{key} = {tomlValue}");
+            return string.Join(newline, lines);
+        }
+
+        while (lines.Count > 0 && string.IsNullOrWhiteSpace(lines[^1]))
+        {
+            lines.RemoveAt(lines.Count - 1);
+        }
+
+        if (lines.Count > 0)
+        {
+            lines.Add(string.Empty);
+        }
+
+        lines.Add($"[{sectionName}]");
+        lines.Add($"{key} = {tomlValue}");
+        lines.Add(string.Empty);
+        return string.Join(newline, lines);
     }
 
     private static void RemoveTopLevel(List<string> lines, string key)

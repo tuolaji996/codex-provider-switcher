@@ -52,6 +52,7 @@ public partial class MainWindow : Window
     private bool _updateCheckCompleted;
     private bool _updateCheckFailed;
     private bool _isCheckingForUpdates;
+    private bool _isUpdatingSolUltraSetting;
 
     public MainWindow()
     {
@@ -82,6 +83,7 @@ public partial class MainWindow : Window
             ApplyLanguage();
             UpdateVersionText();
             RefreshLunaWorkerAgentStatus();
+            RefreshSolUltraSetting();
             BaseUrlTextBox.Text = _settings.ThirdPartyBaseUrl;
             ModelTextBox.Text = _settings.ThirdPartyModel;
             RestartCheckBox.IsChecked = _settings.RestartAfterSwitch;
@@ -389,6 +391,65 @@ public partial class MainWindow : Window
         InstallLunaWorkerButton.IsEnabled =
             !_isBusy && status.State == ManagedAgentState.Missing;
         OpenLunaAgentsFolderButton.IsEnabled = !_isBusy;
+    }
+
+    private void RefreshSolUltraSetting()
+    {
+        var enabled = _configService.ReadSolUltraVisibility();
+        _isUpdatingSolUltraSetting = true;
+        try
+        {
+            SolUltraCheckBox.IsChecked = enabled;
+        }
+        finally
+        {
+            _isUpdatingSolUltraSetting = false;
+        }
+
+        UpdateSolUltraStatus(enabled);
+    }
+
+    private void UpdateSolUltraStatus(bool enabled)
+    {
+        SolUltraStatusText.Text = enabled
+            ? T("已启用（Sol 可选 Ultra）", "Enabled (Ultra available for Sol)")
+            : T("未启用（最高显示 Max）", "Disabled (up to Max shown)");
+        SolUltraCheckBox.ToolTip = enabled
+            ? T(
+                "关闭后，Codex 模型选择器将隐藏 Ultra。",
+                "Turn this off to hide Ultra in the Codex model picker.")
+            : T(
+                "为 gpt-5.6-sol 显示 Ultra；Luna 任务 Agent 仍只到 Max。",
+                "Show Ultra for gpt-5.6-sol; the Luna task agent remains limited to Max.");
+    }
+
+    private async void SolUltraCheckBox_Changed(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (!_isInitialized || _isUpdatingSolUltraSetting)
+        {
+            return;
+        }
+
+        var enabled = SolUltraCheckBox.IsChecked == true;
+        await RunBusyAsync(() =>
+        {
+            var backupFolder = _configService.SetSolUltraVisibility(enabled);
+            OperationStatusText.Text = enabled
+                ? F(
+                    "已启用 Sol Ultra；重启 Codex 后生效。备份：{0}",
+                    "Sol Ultra is enabled. Restart Codex to apply it. Backup: {0}",
+                    backupFolder ?? T("无需写入", "No write needed"))
+                : F(
+                    "已隐藏 Ultra；重启 Codex 后生效。备份：{0}",
+                    "Ultra is hidden. Restart Codex to apply it. Backup: {0}",
+                    backupFolder ?? T("无需写入", "No write needed"));
+            return Task.CompletedTask;
+        });
+
+        RefreshSolUltraSetting();
+        RefreshBackups();
     }
 
     private async void UpdateActionButton_Click(object sender, RoutedEventArgs e)
@@ -1902,6 +1963,7 @@ public partial class MainWindow : Window
         OpenDataFolderButton.IsEnabled = !busy;
         OpenGitHubButton.IsEnabled = !busy;
         RunSetupAgainButton.IsEnabled = !busy;
+        SolUltraCheckBox.IsEnabled = !busy;
         InstallLunaWorkerButton.IsEnabled =
             !busy && _lunaWorkerAgentStatus?.State == ManagedAgentState.Missing;
         OpenLunaAgentsFolderButton.IsEnabled = !busy;
@@ -2055,6 +2117,10 @@ public partial class MainWindow : Window
         RunSetupAgainButton.ToolTip = T(
             "重新运行首次设置向导",
             "Run the first-time setup wizard again");
+        SolUltraTitleText.Text = "Sol Ultra";
+        SolUltraDescriptionText.Text = T(
+            "在 Codex 模型选择器中显示 gpt-5.6-sol 的 Ultra 档位；Luna 任务 Agent 仍使用 Max。",
+            "Show the Ultra option for gpt-5.6-sol in the Codex model picker; the Luna task agent remains on Max.");
         LunaWorkerTitleText.Text = T(
             "Luna 任务 Agent",
             "Luna task agent");
@@ -2090,6 +2156,7 @@ public partial class MainWindow : Window
         LightThemeButton.ToolTip = T("使用浅色外观", "Use light appearance");
         DarkThemeButton.ToolTip = T("使用深色外观", "Use dark appearance");
         SystemThemeButton.ToolTip = T("跟随 Windows 外观", "Follow Windows appearance");
+        UpdateSolUltraStatus(SolUltraCheckBox.IsChecked == true);
         UpdateLunaWorkerAgentStatus();
         UpdateUpdateCheckUi();
         UpdateLanguageButtons();
@@ -2113,7 +2180,7 @@ public partial class MainWindow : Window
 
     private static Version CurrentApplicationVersion() =>
         GitHubReleaseUpdateService.NormalizeVersion(
-            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 3, 4));
+            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 3, 5));
 
     private Brush ResourceBrush(string key) =>
         (Brush)FindResource(key);

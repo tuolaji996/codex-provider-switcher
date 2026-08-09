@@ -64,7 +64,7 @@ history, and backups are not removed.
 
 ## Interface
 
-Version 1.3.4 uses a compact native Windows workspace:
+Version 1.3.5 uses a compact native Windows workspace:
 
 - **Home:** current route, shared-history health, and quick switching.
 - **Providers:** official OpenAI and third-party endpoint, model, and key
@@ -72,8 +72,8 @@ Version 1.3.4 uses a compact native Windows workspace:
 - **Diagnostics:** official host, plugin tool protocol, image generation, and
   Mobile Remote prerequisites.
 - **Backups:** a read-only table of every timestamped `config.toml` backup.
-- **Settings:** language, appearance, restart behavior, optional Luna task agent,
-  automatic update status, and local data access.
+- **Settings:** language, appearance, restart behavior, Sol Ultra visibility,
+  optional Luna task agent, automatic update status, and local data access.
 
 The navigation pane collapses to icons at narrow window sizes. All operational
 status remains visible in the bottom status bar.
@@ -148,6 +148,14 @@ untouched. Other agent definitions are never changed. A third-party route can
 run this agent only when that provider supports the `gpt-5.6-luna` model; the
 switcher does not translate or silently replace the model.
 
+## Sol Ultra visibility
+
+Settings can show or hide Ultra in the Codex model picker by updating only
+`[desktop].show-ultra-in-model-picker-slider` in `config.toml`. Sol supports
+Ultra in Codex; the optional Luna task agent remains on Max. The switcher does
+not write `model_reasoning_effort = "ultra"`, change the current model, switch
+providers, or modify chat history. Restart Codex after changing this setting.
+
 OpenAI references:
 
 - [Plugins](https://learn.chatgpt.com/docs/plugins)
@@ -188,7 +196,7 @@ already included on the target machine. A .NET 8 SDK is needed only to build.
 To create the versioned ZIP and SHA-256 file used by GitHub Releases:
 
 ```powershell
-.\release.ps1 -Version 1.3.4 -DotNet "C:\path\to\dotnet.exe"
+.\release.ps1 -Version 1.3.5 -DotNet "C:\path\to\dotnet.exe"
 ```
 
 The installed files are placed in:

@@ -46,22 +46,22 @@ var updateHandler = new StubHttpMessageHandler(
     HttpStatusCode.OK,
     """
     {
-      "tag_name": "v1.3.5",
+      "tag_name": "v1.3.6",
       "html_url": "https://malicious.example/not-used"
     }
     """);
 using var updateClient = new HttpClient(updateHandler);
 var updateService = new GitHubReleaseUpdateService(updateClient);
-var availableUpdate = await updateService.CheckAsync(new Version(1, 3, 4, 0));
+var availableUpdate = await updateService.CheckAsync(new Version(1, 3, 5, 0));
 Check(availableUpdate.IsUpdateAvailable, "A newer GitHub release was not detected.");
 Check(
-    availableUpdate.CurrentVersion == new Version(1, 3, 4) &&
-    availableUpdate.LatestVersion == new Version(1, 3, 5) &&
-    availableUpdate.LatestTag == "v1.3.5",
+    availableUpdate.CurrentVersion == new Version(1, 3, 5) &&
+    availableUpdate.LatestVersion == new Version(1, 3, 6) &&
+    availableUpdate.LatestTag == "v1.3.6",
     "The GitHub release versions were not normalized correctly.");
 Check(
     availableUpdate.ReleaseUri == new Uri(
-        "https://github.com/tuolaji996/codex-provider-switcher/releases/tag/v1.3.5"),
+        "https://github.com/tuolaji996/codex-provider-switcher/releases/tag/v1.3.6"),
     "The update link did not stay on the managed GitHub repository.");
 Check(
     updateHandler.RequestUri == new Uri(
@@ -70,23 +70,23 @@ Check(
     updateHandler.ApiVersion == "2026-03-10" &&
     !updateHandler.HasAuthorization &&
     updateHandler.UserAgent.Contains(
-        "CodexProviderSwitcher/1.3.4",
+        "CodexProviderSwitcher/1.3.5",
         StringComparison.Ordinal),
     "The GitHub latest-release request is missing required API headers.");
 
 var currentReleaseService = new GitHubReleaseUpdateService(
     new HttpClient(new StubHttpMessageHandler(
         HttpStatusCode.OK,
-        "{\"tag_name\":\"v1.3.4\"}")));
+        "{\"tag_name\":\"v1.3.5\"}")));
 Check(
-    !(await currentReleaseService.CheckAsync(new Version(1, 3, 4))).IsUpdateAvailable,
+    !(await currentReleaseService.CheckAsync(new Version(1, 3, 5))).IsUpdateAvailable,
     "The current release was incorrectly reported as an update.");
 var olderReleaseService = new GitHubReleaseUpdateService(
     new HttpClient(new StubHttpMessageHandler(
         HttpStatusCode.OK,
-        "{\"tag_name\":\"v1.3.3\"}")));
+        "{\"tag_name\":\"v1.3.4\"}")));
 Check(
-    !(await olderReleaseService.CheckAsync(new Version(1, 3, 4))).IsUpdateAvailable,
+    !(await olderReleaseService.CheckAsync(new Version(1, 3, 5))).IsUpdateAvailable,
     "An older release was incorrectly reported as an update.");
 
 var invalidReleaseRejected = false;
@@ -96,7 +96,7 @@ try
         new HttpClient(new StubHttpMessageHandler(
             HttpStatusCode.OK,
             "{\"tag_name\":\"nightly-latest\"}")));
-    await invalidReleaseService.CheckAsync(new Version(1, 3, 4));
+    await invalidReleaseService.CheckAsync(new Version(1, 3, 5));
 }
 catch (InvalidDataException)
 {
@@ -111,7 +111,7 @@ try
         new HttpClient(new StubHttpMessageHandler(
             HttpStatusCode.Forbidden,
             "{\"message\":\"rate limited\"}")));
-    await failedReleaseService.CheckAsync(new Version(1, 3, 4));
+    await failedReleaseService.CheckAsync(new Version(1, 3, 5));
 }
 catch (HttpRequestException)
 {
@@ -517,12 +517,17 @@ var original = """
     model_provider = "OpenAI"
     model = "gpt-5.6-sol"
     review_model = "gpt-5.5"
+    model_reasoning_effort = "max"
     approval_policy = "never"
 
     [model_providers.OpenAI]
     name = "OpenAI"
     wire_api = "responses"
     requires_openai_auth = true
+
+    [desktop]
+    enabled-reasoning-efforts = ["low", "medium", "high", "xhigh", "max", "ultra"]
+    show-ultra-in-model-picker-slider = false
 
     [features]
     hooks = true
@@ -540,6 +545,82 @@ var original = """
     [mcp_servers.sample]
     command = "sample.exe"
     """;
+
+Check(
+    !service.ParseSolUltraVisibility(original),
+    "A disabled Sol Ultra visibility setting was not parsed.");
+var solUltraEnabled = service.BuildSolUltraVisibilityConfig(original, true);
+Check(
+    service.ParseSolUltraVisibility(solUltraEnabled),
+    "Sol Ultra visibility was not enabled.");
+Check(
+    solUltraEnabled.Contains(
+        "enabled-reasoning-efforts = [\"low\", \"medium\", \"high\", \"xhigh\", \"max\", \"ultra\"]",
+        StringComparison.Ordinal) &&
+    solUltraEnabled.Contains("[mcp_servers.sample]", StringComparison.Ordinal),
+    "Enabling Sol Ultra removed a sibling desktop setting or unrelated section.");
+Check(
+    solUltraEnabled.Split(
+        ConfigService.SolUltraVisibilityKey,
+        StringSplitOptions.None).Length == 2,
+    "The Sol Ultra visibility assignment was duplicated.");
+Check(
+    service.BuildSolUltraVisibilityConfig(solUltraEnabled, true) == solUltraEnabled,
+    "Enabling Sol Ultra twice was not idempotent.");
+var solUltraDisabled = service.BuildSolUltraVisibilityConfig(solUltraEnabled, false);
+Check(
+    !service.ParseSolUltraVisibility(solUltraDisabled) &&
+    solUltraDisabled.Contains(
+        "show-ultra-in-model-picker-slider = false",
+        StringComparison.Ordinal),
+    "Sol Ultra visibility was not disabled.");
+
+const string noDesktopConfig =
+    "model = \"gpt-5.6-sol\"\r\n\r\n[features]\r\napps = true\r\n";
+var addedDesktopConfig = service.BuildSolUltraVisibilityConfig(noDesktopConfig, true);
+Check(
+    service.ParseSolUltraVisibility(addedDesktopConfig) &&
+    addedDesktopConfig.Contains("[desktop]\r\n", StringComparison.Ordinal) &&
+    addedDesktopConfig.Contains("[features]\r\napps = true", StringComparison.Ordinal) &&
+    !addedDesktopConfig.Replace("\r\n", string.Empty, StringComparison.Ordinal)
+        .Contains('\n'),
+    "A missing desktop section was not added with CRLF and unrelated settings preserved.");
+Check(
+    service.BuildSolUltraVisibilityConfig(addedDesktopConfig, true) == addedDesktopConfig,
+    "The newly added desktop setting was not idempotent.");
+
+var solUltraConfigRoot = Path.Combine(
+    Path.GetTempPath(),
+    $"codex-provider-switcher-sol-ultra-test-{Guid.NewGuid():N}");
+var solUltraConfigPath = Path.Combine(solUltraConfigRoot, "config.toml");
+string? solUltraBackupFolder = null;
+try
+{
+    Directory.CreateDirectory(solUltraConfigRoot);
+    File.WriteAllText(solUltraConfigPath, original);
+    solUltraBackupFolder = service.SetSolUltraVisibility(true, solUltraConfigPath);
+    Check(
+        solUltraBackupFolder is not null &&
+        File.ReadAllText(Path.Combine(solUltraBackupFolder, "config.toml")) == original,
+        "The Sol Ultra update did not create an exact pre-write backup.");
+    Check(
+        service.ReadSolUltraVisibility(solUltraConfigPath),
+        "The Sol Ultra update did not pass read-back verification.");
+    Check(
+        service.SetSolUltraVisibility(true, solUltraConfigPath) is null,
+        "An unchanged Sol Ultra setting created another backup or write.");
+}
+finally
+{
+    if (Directory.Exists(solUltraConfigRoot))
+    {
+        Directory.Delete(solUltraConfigRoot, true);
+    }
+    if (solUltraBackupFolder is not null && Directory.Exists(solUltraBackupFolder))
+    {
+        Directory.Delete(solUltraBackupFolder, true);
+    }
+}
 
 var profileCredentialTarget = CredentialTargetFactory.CreateForProfileId(
     Guid.NewGuid().ToString("N"));
@@ -581,6 +662,12 @@ Check(
     thirdParty.Contains("[features]", StringComparison.Ordinal) &&
     thirdParty.Contains("image_generation = true", StringComparison.Ordinal),
     "Feature configuration was removed in third-party mode.");
+Check(
+    thirdParty.Contains("[desktop]", StringComparison.Ordinal) &&
+    thirdParty.Contains(
+        "show-ultra-in-model-picker-slider = false",
+        StringComparison.Ordinal),
+    "The Sol Ultra desktop setting was removed in third-party mode.");
 Check(
     thirdParty.Contains("[plugins.github]", StringComparison.Ordinal) &&
     thirdParty.Contains("enabled = true", StringComparison.Ordinal),
@@ -637,6 +724,12 @@ Check(
     official.Contains("[features]", StringComparison.Ordinal) &&
     official.Contains("image_generation = true", StringComparison.Ordinal),
     "Feature configuration was removed after the official round trip.");
+Check(
+    official.Contains("[desktop]", StringComparison.Ordinal) &&
+    official.Contains(
+        "show-ultra-in-model-picker-slider = false",
+        StringComparison.Ordinal),
+    "The Sol Ultra desktop setting was removed after the official round trip.");
 Check(
     official.Contains("[plugins.github]", StringComparison.Ordinal) &&
     official.Contains("enabled = true", StringComparison.Ordinal),
@@ -902,6 +995,9 @@ try
         LunaWorkerAgentService.Template.Contains(
             "model_reasoning_effort = \"max\"",
             StringComparison.Ordinal) &&
+        !LunaWorkerAgentService.Template.Contains(
+            "ultra",
+            StringComparison.OrdinalIgnoreCase) &&
         LunaWorkerAgentService.Template.Contains(
             "developer_instructions = \"\"\"",
             StringComparison.Ordinal),

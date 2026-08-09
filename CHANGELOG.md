@@ -4,6 +4,27 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.3.5] - 2026-08-08
+
+### Added
+
+- A bilingual Settings switch that exposes Sol Ultra in the Codex model picker.
+
+### Safety
+
+- The switch updates only
+  `[desktop].show-ultra-in-model-picker-slider`, with a timestamped backup,
+  atomic write, read-back verification, and rollback on failure.
+- Luna task agents remain on `gpt-5.6-luna / max`. The switcher never writes
+  Ultra as a Responses API reasoning value, changes the selected model or
+  provider, or rewrites chat history.
+
+### Verified
+
+- Self-tests cover enabled, disabled, and missing desktop settings, idempotent
+  rewrites, CRLF preservation, sibling-key retention, and the exact pre-write
+  backup.
+
 ## [1.3.4] - 2026-08-02
 
 ### Added
