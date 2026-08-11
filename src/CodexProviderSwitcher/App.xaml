@@ -1,7 +1,6 @@
 <Application x:Class="CodexProviderSwitcher.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             StartupUri="MainWindow.xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Application.Resources>
         <SolidColorBrush x:Key="WindowBrush" Color="#F5F6F8" />
         <SolidColorBrush x:Key="NavigationBrush" Color="#FFFFFF" />

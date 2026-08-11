@@ -622,7 +622,21 @@ public sealed partial class ConnectionTestService
         string apiKey)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        try
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue(
+                "Bearer",
+                apiKey.Trim());
+        }
+        catch (FormatException exception)
+        {
+            request.Dispose();
+            throw new InvalidOperationException(
+                T(
+                    "API Key 格式无效；请求未发送。",
+                    "The API key format is invalid; the request was not sent."),
+                exception);
+        }
         request.Content = new StringContent(
             JsonSerializer.Serialize(payload),
             Encoding.UTF8,

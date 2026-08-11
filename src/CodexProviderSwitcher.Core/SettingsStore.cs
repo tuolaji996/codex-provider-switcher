@@ -174,6 +174,10 @@ public sealed class SettingsStore
         var profile = new ProviderProfile
         {
             Id = profileId,
+            // A SuiXiang endpoint is a normal direct Responses route unless
+            // the user selected the experimental K3 bridge explicitly.  Do
+            // not infer the bridge merely from the host name, because the
+            // same endpoint may expose other models directly.
             Kind = IsSuiXiangBaseUrl(baseUrl)
                 ? ProviderKinds.SuiXiang
                 : ProviderKinds.Custom,
@@ -231,8 +235,32 @@ public sealed class SettingsStore
             changed = true;
         }
 
-        if (!string.IsNullOrWhiteSpace(currentStatus.BaseUrl) &&
-            !string.Equals(profile.BaseUrl, currentStatus.BaseUrl, StringComparison.Ordinal))
+        var kimiRoute = IsKimiStatus(currentStatus) ||
+                        (profile.Kind == ProviderKinds.Kimi &&
+                         IsKimiBaseUrl(profile.BaseUrl) &&
+                         string.Equals(
+                             currentStatus.Model,
+                             AppPaths.DefaultKimiModel,
+                             StringComparison.Ordinal));
+        if (kimiRoute)
+        {
+            if (!string.Equals(profile.Kind, ProviderKinds.Kimi, StringComparison.Ordinal))
+            {
+                profile.Kind = ProviderKinds.Kimi;
+                changed = true;
+            }
+
+            // The live config points at the local compatibility router. Keep
+            // the profile's upstream SuiXiang URL as the credential/profile
+            // identity instead of replacing it with the loopback transport.
+            if (!IsKimiBaseUrl(profile.BaseUrl))
+            {
+                profile.BaseUrl = AppPaths.KimiUpstreamBaseUrl;
+                changed = true;
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(currentStatus.BaseUrl) &&
+                 !string.Equals(profile.BaseUrl, currentStatus.BaseUrl, StringComparison.Ordinal))
         {
             profile.BaseUrl = currentStatus.BaseUrl;
             changed = true;
@@ -275,6 +303,17 @@ public sealed class SettingsStore
             }
         }
 
+        if (IsKimiStatus(status))
+        {
+            var kimiProfile = settings.ProviderProfiles.FirstOrDefault(profile =>
+                profile.Kind == ProviderKinds.Kimi &&
+                string.Equals(profile.Model, status.Model, StringComparison.Ordinal));
+            if (kimiProfile is not null)
+            {
+                return kimiProfile;
+            }
+        }
+
         return settings.ProviderProfiles.FirstOrDefault(profile =>
             string.Equals(profile.BaseUrl, status.BaseUrl, StringComparison.Ordinal) &&
             string.Equals(profile.Model, status.Model, StringComparison.Ordinal));
@@ -298,7 +337,44 @@ public sealed class SettingsStore
         element.EnumerateObject().Any(property =>
             property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase));
 
-    private static bool IsSuiXiangBaseUrl(string baseUrl) =>
+    /// <summary>
+    /// Returns true only for the fixed SuiXiang upstream identity used by the
+    /// experimental K3 bridge.  The bridge still requires model <c>k3</c> and
+    /// profile kind <see cref="ProviderKinds.Kimi"/>; other SuiXiang models
+    /// remain ordinary direct Responses routes.
+    /// </summary>
+    public static bool IsKimiBaseUrl(string? baseUrl) =>
+        Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) &&
+        uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+        uri.Host.Equals("sui-xiang.com", StringComparison.OrdinalIgnoreCase) &&
+        uri.IsDefaultPort &&
+        string.Equals(
+            uri.AbsolutePath.TrimEnd('/'),
+            "/v1",
+            StringComparison.OrdinalIgnoreCase) &&
+        string.IsNullOrEmpty(uri.Query) &&
+        string.IsNullOrEmpty(uri.Fragment);
+
+    public static bool IsKimiLoopbackBaseUrl(string? baseUrl) =>
+        Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) &&
+        uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+        uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase) &&
+        uri.Port == AppPaths.KimiRouterPort &&
+        string.Equals(
+            uri.AbsolutePath.TrimEnd('/'),
+            "/v1",
+            StringComparison.OrdinalIgnoreCase) &&
+        string.IsNullOrEmpty(uri.Query) &&
+        string.IsNullOrEmpty(uri.Fragment);
+
+    private static bool IsKimiStatus(ConfigStatus status) =>
+        string.Equals(
+            status.ModelCatalogJson,
+            AppPaths.KimiModelCatalogFileName,
+            StringComparison.Ordinal) ||
+        IsKimiLoopbackBaseUrl(status.BaseUrl);
+
+    private static bool IsSuiXiangBaseUrl(string? baseUrl) =>
         Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) &&
         uri.Host.Equals("sui-xiang.com", StringComparison.OrdinalIgnoreCase);
 }

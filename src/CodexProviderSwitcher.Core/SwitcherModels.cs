@@ -16,7 +16,8 @@ public sealed record ConfigStatus(
     string? ReviewModel,
     string? BaseUrl,
     bool UsesOfficialAuthentication,
-    string? CredentialTarget = null);
+    string? CredentialTarget = null,
+    string? ModelCatalogJson = null);
 
 public sealed record SessionHealth(
     int TotalFiles,
@@ -58,6 +59,7 @@ public sealed record ResponsesStreamSummary(
 public static class ProviderKinds
 {
     public const string SuiXiang = "sui-xiang";
+    public const string Kimi = "kimi";
     public const string Custom = "custom";
 }
 

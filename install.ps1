@@ -20,7 +20,44 @@ $stageDirectory = Join-Path $programsRoot "CodexProviderSwitcher.installing-$ope
 $previousDirectory = Join-Path $programsRoot "CodexProviderSwitcher.previous-$operationId"
 $appSource = Join-Path $PublishDirectory "CodexProviderSwitcher.exe"
 $brokerSource = Join-Path $PublishDirectory "CodexProviderToken.exe"
+$routerSource = Join-Path $PublishDirectory "CodexProviderKimiRouter.exe"
 $webViewLoaderSource = Join-Path $PublishDirectory "WebView2Loader.dll"
+$routerSupportFiles = @(
+    "CodexProviderKimiRouter.dll",
+    "CodexProviderKimiRouter.deps.json",
+    "CodexProviderKimiRouter.runtimeconfig.json"
+)
+
+function Stop-AndWaitForProcess {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ProcessName,
+        [Parameter(Mandatory = $true)]
+        [string]$DisplayName
+    )
+
+    $running = @(
+        Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
+    )
+    if ($running.Count -gt 0) {
+        $running |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $remaining = @(
+            Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
+        )
+        if ($remaining.Count -eq 0) {
+            return
+        }
+
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    throw "$DisplayName is still running. Close it and run the installer again."
+}
 
 if (-not (Test-Path -LiteralPath $appSource)) {
     throw "Published GUI was not found: $appSource"
@@ -28,6 +65,17 @@ if (-not (Test-Path -LiteralPath $appSource)) {
 
 if (-not (Test-Path -LiteralPath $brokerSource)) {
     throw "Published token broker was not found: $brokerSource"
+}
+
+if (-not (Test-Path -LiteralPath $routerSource)) {
+    throw "Published Kimi router was not found: $routerSource"
+}
+
+foreach ($routerSupportFile in $routerSupportFiles) {
+    $routerSupportPath = Join-Path $PublishDirectory $routerSupportFile
+    if (-not (Test-Path -LiteralPath $routerSupportPath)) {
+        throw "Published Kimi router support file was not found: $routerSupportPath"
+    }
 }
 
 if (-not (Test-Path -LiteralPath $webViewLoaderSource)) {
@@ -45,8 +93,15 @@ try {
 
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "CodexProviderSwitcher.exe")) -or
         -not (Test-Path -LiteralPath (Join-Path $stageDirectory "CodexProviderToken.exe")) -or
+        -not (Test-Path -LiteralPath (Join-Path $stageDirectory "CodexProviderKimiRouter.exe")) -or
         -not (Test-Path -LiteralPath (Join-Path $stageDirectory "WebView2Loader.dll"))) {
         throw "The staged installation is incomplete."
+    }
+
+    foreach ($routerSupportFile in $routerSupportFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory $routerSupportFile))) {
+            throw "The staged installation is missing $routerSupportFile."
+        }
     }
 }
 catch {
@@ -57,8 +112,23 @@ catch {
     throw
 }
 
-Get-Process CodexProviderSwitcher -ErrorAction SilentlyContinue |
-    Stop-Process -Force -ErrorAction SilentlyContinue
+try {
+    # Use exact process names only. The GUI and router are the only processes
+    # owned by this installation that can lock the directory being replaced.
+    Stop-AndWaitForProcess `
+        -ProcessName "CodexProviderSwitcher" `
+        -DisplayName "Codex Provider Switcher"
+    Stop-AndWaitForProcess `
+        -ProcessName "CodexProviderKimiRouter" `
+        -DisplayName "Codex Provider Kimi Router"
+}
+catch {
+    if (Test-Path -LiteralPath $stageDirectory) {
+        Remove-Item -LiteralPath $stageDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    throw
+}
 
 try {
     if (Test-Path -LiteralPath $installDirectory) {

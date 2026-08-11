@@ -5,7 +5,9 @@ namespace CodexProviderSwitcher.Core;
 
 public sealed partial class ConfigService
 {
+    public const string EnabledReasoningEffortsKey = "enabled-reasoning-efforts";
     public const string SolUltraVisibilityKey = "show-ultra-in-model-picker-slider";
+    public const string ModelCatalogJsonKey = "model_catalog_json";
 
     private const string ManagedComment =
         "# Managed by Codex Provider Switcher. Keep this provider ID stable so all chats share one history.";
@@ -32,6 +34,7 @@ public sealed partial class ConfigService
         var provider = ReadTopLevelString(text, "model_provider") ?? string.Empty;
         var model = ReadTopLevelString(text, "model");
         var reviewModel = ReadTopLevelString(text, "review_model");
+        var modelCatalogJson = ReadTopLevelString(text, ModelCatalogJsonKey);
         var block = ReadSection(text, $"model_providers.{AppPaths.StableProviderId}");
         var baseUrl = block is null ? null : ReadStringValue(block, "base_url");
         var officialAuth = block is not null && ReadBooleanValue(block, "requires_openai_auth");
@@ -58,7 +61,8 @@ public sealed partial class ConfigService
             reviewModel,
             baseUrl,
             officialAuth,
-            credentialTarget);
+            credentialTarget,
+            modelCatalogJson);
     }
 
     public bool ReadSolUltraVisibility(string? path = null)
@@ -73,6 +77,23 @@ public sealed partial class ConfigService
         var desktopBlock = ReadSection(text, "desktop");
         return desktopBlock is not null &&
                ReadBooleanValue(desktopBlock, SolUltraVisibilityKey);
+    }
+
+    public bool ReadSolUltraAvailability(string? path = null)
+    {
+        path ??= AppPaths.ConfigPath;
+        return File.Exists(path) &&
+               ParseSolUltraAvailability(File.ReadAllText(path));
+    }
+
+    public bool ParseSolUltraAvailability(string text)
+    {
+        var desktopBlock = ReadSection(text, "desktop");
+        return desktopBlock is not null &&
+               ReadStringArrayContains(
+                   desktopBlock,
+                   EnabledReasoningEffortsKey,
+                   "ultra");
     }
 
     public string BuildSolUltraVisibilityConfig(string original, bool enabled) =>
@@ -134,6 +155,28 @@ public sealed partial class ConfigService
         }
     }
 
+    public string? RequestSolUltraEnablement(string? configPath = null)
+    {
+        configPath ??= AppPaths.ConfigPath;
+        if (!File.Exists(configPath))
+        {
+            throw new FileNotFoundException(
+                Localizer.Text(
+                    "未找到 Codex config.toml。",
+                    "Codex config.toml was not found."),
+                configPath);
+        }
+
+        var original = File.ReadAllText(configPath);
+        if (ParseSolUltraAvailability(original) ||
+            ParseSolUltraVisibility(original))
+        {
+            return null;
+        }
+
+        return SetSolUltraVisibility(true, configPath);
+    }
+
     public string BuildOfficialConfig(
         string original,
         string officialModel,
@@ -191,6 +234,36 @@ public sealed partial class ConfigService
             """;
 
         return Rewrite(original, model, model, managedBlock);
+    }
+
+    public string BuildKimiConfig(
+        string original,
+        string model,
+        string tokenBrokerWindowsPath,
+        string credentialTarget)
+    {
+        var brokerWslPath = ToWslPath(tokenBrokerWindowsPath);
+        credentialTarget = CredentialTargetFactory.RequireValid(credentialTarget);
+        var managedBlock = $"""
+            {ManagedComment}
+            [model_providers.{AppPaths.StableProviderId}]
+            name = "OpenAI"
+            base_url = "{EscapeToml(AppPaths.KimiRouterBaseUrl)}"
+            wire_api = "responses"
+
+            [model_providers.{AppPaths.StableProviderId}.auth]
+            command = "{EscapeToml(brokerWslPath)}"
+            args = ["--credential-target", "{EscapeToml(credentialTarget)}", "--ensure-kimi-router"]
+            timeout_ms = 20000
+            refresh_interval_ms = 0
+            """;
+
+        return Rewrite(
+            original,
+            model,
+            model,
+            managedBlock,
+            AppPaths.KimiModelCatalogFileName);
     }
 
     public string CreateBackup(string? configPath = null)
@@ -253,7 +326,8 @@ public sealed partial class ConfigService
         string original,
         string model,
         string? reviewModel,
-        string managedBlock)
+        string managedBlock,
+        string? modelCatalogJson = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(model);
 
@@ -262,6 +336,14 @@ public sealed partial class ConfigService
 
         lines.RemoveAll(line => line.Trim().Equals(ManagedComment, StringComparison.Ordinal));
         RemoveManagedProviderSections(lines);
+        if (modelCatalogJson is null)
+        {
+            RemoveManagedModelCatalogAssignments(lines);
+        }
+        else
+        {
+            EnsureManagedModelCatalogAssignment(lines, modelCatalogJson);
+        }
 
         UpsertTopLevel(lines, "model_provider", $"\"{AppPaths.StableProviderId}\"");
         UpsertTopLevel(lines, "model", $"\"{EscapeToml(model.Trim())}\"");
@@ -343,6 +425,74 @@ public sealed partial class ConfigService
         }
 
         lines.Insert(insertionIndex, $"{key} = {tomlValue}");
+    }
+
+    private static void RemoveManagedModelCatalogAssignments(List<string> lines)
+    {
+        for (var index = 0; index < lines.Count;)
+        {
+            if (ParseSectionName(lines[index]) is not null)
+            {
+                break;
+            }
+
+            if (IsAssignment(lines[index], ModelCatalogJsonKey) &&
+                string.Equals(
+                    ReadStringFromAssignment(lines[index]),
+                    AppPaths.KimiModelCatalogFileName,
+                    StringComparison.Ordinal))
+            {
+                lines.RemoveAt(index);
+                continue;
+            }
+
+            index++;
+        }
+    }
+
+    private static void EnsureManagedModelCatalogAssignment(
+        List<string> lines,
+        string expectedValue)
+    {
+        if (!string.Equals(
+                expectedValue,
+                AppPaths.KimiModelCatalogFileName,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "The Kimi model catalog path is not managed by this application.",
+                nameof(expectedValue));
+        }
+
+        for (var index = 0; index < lines.Count; index++)
+        {
+            if (ParseSectionName(lines[index]) is not null)
+            {
+                break;
+            }
+
+            if (!IsAssignment(lines[index], ModelCatalogJsonKey))
+            {
+                continue;
+            }
+
+            if (!string.Equals(
+                    ReadStringFromAssignment(lines[index]),
+                    expectedValue,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    Localizer.Text(
+                        "已存在用户自定义的 model_catalog_json；未改动配置。",
+                        "A user-owned model_catalog_json already exists; the configuration was not changed."));
+            }
+        }
+
+        RemoveManagedModelCatalogAssignments(lines);
+        UpsertTopLevel(
+            lines,
+            ModelCatalogJsonKey,
+            $"\"{EscapeToml(expectedValue)}\"");
     }
 
     private static string UpsertSectionAssignment(
@@ -489,6 +639,35 @@ public sealed partial class ConfigService
         return bool.TryParse(value, out var parsed) && parsed;
     }
 
+    private static bool ReadStringArrayContains(
+        string block,
+        string key,
+        string expected)
+    {
+        var line = block
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n')
+            .FirstOrDefault(candidate => IsAssignment(candidate, key));
+        if (line is null)
+        {
+            return false;
+        }
+
+        var equals = line.IndexOf('=');
+        var value = equals < 0 ? string.Empty : line[(equals + 1)..].Trim();
+        var close = value.IndexOf(']');
+        if (!value.StartsWith("[", StringComparison.Ordinal) || close < 0)
+        {
+            return false;
+        }
+
+        var array = value[..(close + 1)];
+        return TomlArrayStringRegex()
+            .Matches(array)
+            .Select(match => Regex.Unescape(match.Groups[1].Value))
+            .Any(item => item.Equals(expected, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static string? ReadCredentialTarget(string? authBlock)
     {
         if (string.IsNullOrWhiteSpace(authBlock))
@@ -500,19 +679,52 @@ public sealed partial class ConfigService
             .Replace("\r\n", "\n", StringComparison.Ordinal)
             .Split('\n')
             .FirstOrDefault(candidate => IsAssignment(candidate, "args"));
-        if (line is null || line.Contains("[]", StringComparison.Ordinal))
+        if (line is null)
         {
             return AppPaths.LegacySuiXiangCredentialTarget;
         }
 
-        var match = CredentialTargetArgsRegex().Match(line);
-        if (!match.Success)
+        var equals = line.IndexOf('=');
+        if (equals < 0)
         {
             return null;
         }
 
-        var target = Regex.Unescape(match.Groups[1].Value);
-        return CredentialTargetFactory.IsValid(target) ? target : null;
+        var value = line[(equals + 1)..].Trim();
+        if (!value.StartsWith("[", StringComparison.Ordinal) ||
+            !value.EndsWith("]", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var arguments = TomlArrayStringRegex()
+            .Matches(value)
+            .Select(match => Regex.Unescape(match.Groups[1].Value))
+            .ToArray();
+        if (arguments.Length == 0)
+        {
+            return value == "[]" ? AppPaths.LegacySuiXiangCredentialTarget : null;
+        }
+
+        string? target = null;
+        for (var index = 0; index < arguments.Length; index++)
+        {
+            if (!string.Equals(arguments[index], "--credential-target", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (target is not null || index + 1 >= arguments.Length)
+            {
+                return null;
+            }
+
+            target = arguments[++index];
+        }
+
+        return target is not null && CredentialTargetFactory.IsValid(target)
+            ? target
+            : null;
     }
 
     private static string? ReadStringFromAssignment(string line)
@@ -563,7 +775,7 @@ public sealed partial class ConfigService
     [GeneratedRegex("^\"((?:\\\\.|[^\"])*)\"")]
     private static partial Regex TomlStringRegex();
 
-    [GeneratedRegex(
-        "^\\s*args\\s*=\\s*\\[\\s*\"--credential-target\"\\s*,\\s*\"((?:\\\\.|[^\"])*)\"\\s*\\]\\s*$")]
-    private static partial Regex CredentialTargetArgsRegex();
+    [GeneratedRegex("\"((?:\\\\.|[^\"])*)\"")]
+    private static partial Regex TomlArrayStringRegex();
+
 }

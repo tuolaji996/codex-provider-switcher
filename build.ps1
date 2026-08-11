@@ -7,6 +7,7 @@ $root = $PSScriptRoot
 $artifacts = Join-Path $root "artifacts"
 $publish = Join-Path $artifacts "publish"
 $tokenPublish = Join-Path $artifacts "token"
+$routerPublish = Join-Path $artifacts "kimi-router"
 
 function Invoke-DotNet {
     param(
@@ -47,6 +48,7 @@ if (Test-Path -LiteralPath $artifacts) {
 
 New-Item -ItemType Directory -Path $publish -Force | Out-Null
 New-Item -ItemType Directory -Path $tokenPublish -Force | Out-Null
+New-Item -ItemType Directory -Path $routerPublish -Force | Out-Null
 
 Invoke-DotNet @(
     "publish",
@@ -74,6 +76,48 @@ Invoke-DotNet @(
     $tokenPublish
 )
 
+Invoke-DotNet @(
+    "publish",
+    (Join-Path $root "src\CodexProviderKimiRouter\CodexProviderKimiRouter.csproj"),
+    "-c",
+    "Release",
+    "-r",
+    "win-x64",
+    "--self-contained",
+    "false",
+    "-o",
+    $routerPublish
+)
+
+$routerOutput = @(Get-ChildItem -LiteralPath $routerPublish -File)
+$routerExecutable = $routerOutput |
+    Where-Object { $_.Name -eq "CodexProviderKimiRouter.exe" } |
+    Select-Object -First 1
+if ($null -eq $routerExecutable) {
+    throw "Published Kimi router was not found: $(Join-Path $routerPublish 'CodexProviderKimiRouter.exe')"
+}
+
+foreach ($routerSupportFile in @(
+    "CodexProviderKimiRouter.dll",
+    "CodexProviderKimiRouter.deps.json",
+    "CodexProviderKimiRouter.runtimeconfig.json"
+)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $routerPublish $routerSupportFile))) {
+        throw "Published Kimi router output is missing $routerSupportFile."
+    }
+}
+
+# The router is framework-dependent rather than single-file. Keep its
+# executable and all router-named sidecars (deps/runtimeconfig/pdb) together
+# in the same package as the GUI.
+foreach ($routerFile in $routerOutput |
+    Where-Object { $_.Name -like "CodexProviderKimiRouter*" }) {
+    Copy-Item `
+        -LiteralPath $routerFile.FullName `
+        -Destination (Join-Path $publish $routerFile.Name) `
+        -Force
+}
+
 Copy-Item `
     -LiteralPath (Join-Path $tokenPublish "CodexProviderToken.exe") `
     -Destination (Join-Path $publish "CodexProviderToken.exe") `
@@ -99,6 +143,14 @@ Invoke-DotNet @(
     "Release",
     "--",
     (Join-Path $publish "CodexProviderToken.exe")
+)
+
+Invoke-DotNet @(
+    "run",
+    "--project",
+    (Join-Path $root "tests\CodexProviderKimiRouter.ProtocolTests\CodexProviderKimiRouter.ProtocolTests.csproj"),
+    "-c",
+    "Release"
 )
 
 Write-Host "Publish output: $publish"

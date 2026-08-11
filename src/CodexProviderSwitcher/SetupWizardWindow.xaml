@@ -287,6 +287,19 @@
                                Text="在应用内完成登录和验证码，然后手动粘贴新的 API Key。"
                                Style="{StaticResource PageLeadStyle}"
                                Margin="16,-4,16,16" />
+                    <Button x:Name="KimiChoiceButton"
+                            Content="连接随想 K3（实验）"
+                            Tag="&#xE8A5;"
+                            Style="{StaticResource SecondaryButton}"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Padding="16,13"
+                            Margin="0,0,0,10"
+                            Click="KimiChoiceButton_Click" />
+                    <TextBlock x:Name="KimiChoiceDescriptionText"
+                               Text="使用随想 API Key，经本机兼容路由器接入 Codex Responses。"
+                               Style="{StaticResource PageLeadStyle}"
+                               Margin="16,-4,16,16" />
                     <Button x:Name="CustomChoiceButton"
                             Content="使用其他服务"
                             Tag="&#xE8A5;"
@@ -427,9 +440,45 @@
                     <TextBlock x:Name="WizardModelLabelText"
                                Text="模型"
                                Style="{StaticResource FieldLabelStyle}" />
-                    <TextBox x:Name="WizardModelTextBox"
-                             Grid.Column="1"
-                             AutomationProperties.LabeledBy="{Binding ElementName=WizardModelLabelText}" />
+                    <Grid Grid.Column="1">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ComboBox x:Name="WizardModelComboBox"
+                                  IsEditable="True"
+                                  IsTextSearchEnabled="False"
+                                  MinHeight="36"
+                                  Padding="8,4"
+                                  FontSize="13"
+                                  Background="{DynamicResource InputBrush}"
+                                  Foreground="{DynamicResource TextBrush}"
+                                  BorderBrush="{DynamicResource BorderBrush}"
+                                  BorderThickness="1"
+                                  AutomationProperties.LabeledBy="{Binding ElementName=WizardModelLabelText}"
+                                  SelectionChanged="WizardModelComboBox_SelectionChanged"
+                                  LostFocus="WizardModelComboBox_LostFocus" />
+                        <Button x:Name="WizardRefreshModelsButton"
+                                Grid.Column="1"
+                                Content="刷新模型列表"
+                                Tag="&#xE72C;"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="8,0,0,0"
+                                VerticalAlignment="Center"
+                                Click="WizardRefreshModelsButton_Click" />
+                        <TextBlock x:Name="WizardModelDiscoveryStatusText"
+                                   Grid.Row="1"
+                                   Grid.ColumnSpan="2"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Margin="0,6,0,0"
+                                   AutomationProperties.LiveSetting="Polite" />
+                    </Grid>
                 </Grid>
                 <Grid Grid.Row="5">
                     <Grid.ColumnDefinitions>

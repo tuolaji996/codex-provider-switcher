@@ -35,6 +35,8 @@ public partial class MainWindow : Window
     private readonly SettingsStore _settingsStore = new();
     private readonly SessionHealthService _sessionHealthService = new();
     private readonly ConnectionTestService _connectionTestService = new();
+    private readonly ModelDiscoveryService _modelDiscoveryService = new();
+    private readonly KimiRouterProcessService _kimiRouterProcessService = new();
     private readonly HostCapabilityDiagnosticsService _hostDiagnosticsService = new();
     private readonly CodexProcessService _processService = new();
     private readonly LunaWorkerAgentService _lunaWorkerAgentService = new();
@@ -52,7 +54,8 @@ public partial class MainWindow : Window
     private bool _updateCheckCompleted;
     private bool _updateCheckFailed;
     private bool _isCheckingForUpdates;
-    private bool _isUpdatingSolUltraSetting;
+    private bool _solUltraAvailable;
+    private string? _kimiRestartWarning;
 
     public MainWindow()
     {
@@ -66,10 +69,24 @@ public partial class MainWindow : Window
     private string TokenBrokerPath =>
         Path.Combine(AppContext.BaseDirectory, "CodexProviderToken.exe");
 
+    private string KimiRouterExecutablePath =>
+        Path.Combine(AppContext.BaseDirectory, AppPaths.KimiRouterExecutableName);
+
     private ProviderProfile ActiveProviderProfile =>
         _settings.EnsureActiveProviderProfile();
 
     private string ActiveCredentialTarget => ActiveProviderProfile.CredentialTarget;
+
+    private bool IsKimiProviderProfile()
+    {
+        var profile = ActiveProviderProfile;
+        return profile.Kind == ProviderKinds.Kimi &&
+               SettingsStore.IsKimiBaseUrl(profile.BaseUrl) &&
+               string.Equals(
+                   profile.Model,
+                   AppPaths.DefaultKimiModel,
+                   StringComparison.Ordinal);
+    }
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
@@ -82,10 +99,10 @@ public partial class MainWindow : Window
             ThemeManager.Apply(_settings.UiTheme);
             ApplyLanguage();
             UpdateVersionText();
-            RefreshLunaWorkerAgentStatus();
+            RefreshLunaWorkerAgentStatus(status);
             RefreshSolUltraSetting();
             BaseUrlTextBox.Text = _settings.ThirdPartyBaseUrl;
-            ModelTextBox.Text = _settings.ThirdPartyModel;
+            ModelComboBox.Text = _settings.ThirdPartyModel;
             RestartCheckBox.IsChecked = _settings.RestartAfterSwitch;
             OpenGeneratedImageButton.IsEnabled = HasGeneratedImage();
             UpdatePersistedProviderCapabilityStatuses();
@@ -127,6 +144,7 @@ public partial class MainWindow : Window
 
     private void MainWindow_Closed(object? sender, EventArgs e)
     {
+        _kimiRouterProcessService.Dispose();
         if (!_systemThemeEventsSubscribed)
         {
             return;
@@ -304,6 +322,20 @@ public partial class MainWindow : Window
         object sender,
         RoutedEventArgs e)
     {
+        var routeStatus = _configService.ReadStatus();
+        if (LunaWorkerAgentService.IsSuiXiangRoute(routeStatus) ||
+            routeStatus.Mode == ProviderMode.Unknown)
+        {
+            OperationStatusText.Text = T(
+                LunaWorkerAgentService.IsSuiXiangRoute(routeStatus)
+                    ? "随想目前不支持 Luna；请先切回官方线路再安装。"
+                    : "请先连接官方或已确认支持 Luna 的第三方线路。",
+                LunaWorkerAgentService.IsSuiXiangRoute(routeStatus)
+                    ? "SuiXiang does not currently support Luna. Switch to the official route before installing it."
+                    : "Connect to official or a third-party route confirmed to support Luna first.");
+            return;
+        }
+
         await RunBusyAsync(() =>
         {
             var status = _lunaWorkerAgentService.Install();
@@ -335,15 +367,21 @@ public partial class MainWindow : Window
             "Opened the Codex agents folder.");
     }
 
-    private void RefreshLunaWorkerAgentStatus()
+    private void RefreshLunaWorkerAgentStatus(ConfigStatus? configStatus = null)
     {
-        _lunaWorkerAgentStatus = _lunaWorkerAgentService.Inspect();
-        UpdateLunaWorkerAgentStatus();
+        configStatus ??= _configService.ReadStatus();
+        _lunaWorkerAgentStatus = _lunaWorkerAgentService.Reconcile(configStatus);
+        UpdateLunaWorkerAgentStatus(configStatus);
     }
 
-    private void UpdateLunaWorkerAgentStatus()
+    private void UpdateLunaWorkerAgentStatus(ConfigStatus? routeStatus = null)
     {
         var status = _lunaWorkerAgentStatus;
+        routeStatus ??= _configService.ReadStatus();
+        var officialRoute = routeStatus.Mode == ProviderMode.Official;
+        var suiXiangRoute = LunaWorkerAgentService.IsSuiXiangRoute(routeStatus);
+        var routeAllowsLuna = routeStatus.Mode != ProviderMode.Unknown &&
+                              !suiXiangRoute;
         if (status is null)
         {
             LunaWorkerStatusText.Text = T("正在检测…", "Checking…");
@@ -357,12 +395,21 @@ public partial class MainWindow : Window
 
         LunaWorkerStatusText.Text = status.State switch
         {
-            ManagedAgentState.Installed => T(
+            ManagedAgentState.Installed when officialRoute => T(
                 "已安装（gpt-5.6-luna / max）",
                 "Installed (gpt-5.6-luna / max)"),
+            ManagedAgentState.Installed => T(
+                "已安装（请确认当前供应商支持 Luna）",
+                "Installed (confirm Luna support with this provider)"),
+            ManagedAgentState.Disabled => T(
+                "已停用（随想不支持；官方线路会自动恢复）",
+                "Disabled (SuiXiang unsupported; restored on official)"),
+            ManagedAgentState.Conflict when suiXiangRoute => T(
+                "停用失败（文件冲突）",
+                "Disable failed (file conflict)"),
             ManagedAgentState.Conflict => T(
-                "已有自定义文件，未覆盖",
-                "Custom file found; not overwritten"),
+                "已有自定义文件或无法访问",
+                "Custom or inaccessible file found"),
             _ => T(
                 "未安装（可选）",
                 "Not installed (optional)")
@@ -370,86 +417,142 @@ public partial class MainWindow : Window
         InstallLunaWorkerButton.Content = status.State switch
         {
             ManagedAgentState.Installed => T("已安装", "Installed"),
-            ManagedAgentState.Conflict => T("已有自定义文件", "Custom file found"),
+            ManagedAgentState.Disabled => T("当前已停用", "Currently disabled"),
+            ManagedAgentState.Conflict when suiXiangRoute => T(
+                "需要处理冲突",
+                "Resolve conflict"),
+            ManagedAgentState.Conflict => T(
+                "文件冲突",
+                "File conflict"),
             _ => T("安装 Luna Agent", "Install Luna agent")
         };
         InstallLunaWorkerButton.ToolTip = status.State switch
         {
             ManagedAgentState.Installed => T(
-                "Luna 任务 Agent 已存在，无需重复安装。",
-                "The Luna task agent is already installed."),
+                officialRoute
+                    ? "Luna 任务 Agent 已存在，无需重复安装。"
+                    : "该 Agent 已安装；当前第三方是否支持 Luna 取决于供应商。",
+                officialRoute
+                    ? "The Luna task agent is already installed."
+                    : "The agent is installed; Luna support on this route depends on the provider."),
+            ManagedAgentState.Disabled => T(
+                suiXiangRoute
+                    ? "随想目前不支持 Luna；切回官方后会自动恢复。"
+                    : "Luna 文件曾因随想线路而停用；切回官方后会自动恢复。",
+                suiXiangRoute
+                    ? "SuiXiang does not currently support Luna; it is restored after switching to official."
+                    : "The Luna file was disabled for SuiXiang and will be restored after switching to official."),
             ManagedAgentState.Conflict => T(
-                "为保护现有配置，不会覆盖同名自定义文件。",
-                "The existing custom file will not be overwritten."),
+                suiXiangRoute
+                    ? "未能停用 Luna：目标文件已存在或无法访问。活动 Agent 可能仍可见；请打开 agents 文件夹处理冲突。任何现有文件都未被覆盖。"
+                    : "检测到自定义文件或文件无法访问。为保护现有配置，不会移动或覆盖它。",
+                suiXiangRoute
+                    ? "Luna could not be disabled because the target exists or is inaccessible. The active agent may remain visible; open the agents folder to resolve it. No file was overwritten."
+                    : "A custom file exists or a file is inaccessible. It will not be moved or overwritten."),
             _ => T(
-                "安装 gpt-5.6-luna、max 的 Luna 任务 Agent。",
-                "Install the gpt-5.6-luna, max Luna task agent.")
+                officialRoute
+                    ? "安装 gpt-5.6-luna、max 的 Luna 任务 Agent。"
+                    : suiXiangRoute
+                        ? "随想目前不支持 Luna；请先切回官方。"
+                        : "安装前请确认当前第三方供应商支持 gpt-5.6-luna。",
+                officialRoute
+                    ? "Install the gpt-5.6-luna, max Luna task agent."
+                    : suiXiangRoute
+                        ? "SuiXiang does not currently support Luna. Switch back to official first."
+                        : "Confirm that this provider supports gpt-5.6-luna before installing.")
         };
         OpenLunaAgentsFolderButton.ToolTip = T(
             "打开 Codex agents 文件夹查看配置。",
             "Open the Codex agents folder to inspect the configuration.");
         InstallLunaWorkerButton.IsEnabled =
-            !_isBusy && status.State == ManagedAgentState.Missing;
+            !_isBusy && routeAllowsLuna && status.State == ManagedAgentState.Missing;
         OpenLunaAgentsFolderButton.IsEnabled = !_isBusy;
     }
 
     private void RefreshSolUltraSetting()
     {
-        var enabled = _configService.ReadSolUltraVisibility();
-        _isUpdatingSolUltraSetting = true;
-        try
-        {
-            SolUltraCheckBox.IsChecked = enabled;
-        }
-        finally
-        {
-            _isUpdatingSolUltraSetting = false;
-        }
-
-        UpdateSolUltraStatus(enabled);
+        _solUltraAvailable = _configService.ReadSolUltraAvailability();
+        UpdateSolUltraStatus();
     }
 
-    private void UpdateSolUltraStatus(bool enabled)
+    private void UpdateSolUltraStatus()
     {
-        SolUltraStatusText.Text = enabled
-            ? T("已启用（Sol 可选 Ultra）", "Enabled (Ultra available for Sol)")
-            : T("未启用（最高显示 Max）", "Disabled (up to Max shown)");
-        SolUltraCheckBox.ToolTip = enabled
+        SolUltraStatusText.Text = _solUltraAvailable
+            ? T("Ultra 已可用", "Ultra available")
+            : T("尚未启用", "Not enabled yet");
+        EnableSolUltraButton.Content = _solUltraAvailable
+            ? T("Ultra 已可用", "Ultra available")
+            : T("启用并重启 Codex", "Enable and restart Codex");
+        EnableSolUltraButton.ToolTip = _solUltraAvailable
             ? T(
-                "关闭后，Codex 模型选择器将隐藏 Ultra。",
-                "Turn this off to hide Ultra in the Codex model picker.")
+                "简体中文 Codex 中，Ultra 是菜单最底部带“更快消耗使用额度”的“极高”。",
+                "In Simplified Chinese Codex, Ultra is the bottom 'Extremely high' item with the faster usage warning.")
             : T(
-                "为 gpt-5.6-sol 显示 Ultra；Luna 任务 Agent 仍只到 Max。",
-                "Show Ultra for gpt-5.6-sol; the Luna task agent remains limited to Max.");
+                "启用 Sol Ultra 后重启 Codex。",
+                "Enable Sol Ultra and restart Codex.");
+        EnableSolUltraButton.IsEnabled = !_isBusy && !_solUltraAvailable;
     }
 
-    private async void SolUltraCheckBox_Changed(
+    private async void EnableSolUltraButton_Click(
         object sender,
         RoutedEventArgs e)
     {
-        if (!_isInitialized || _isUpdatingSolUltraSetting)
+        if (!_isInitialized || _solUltraAvailable)
         {
             return;
         }
 
-        var enabled = SolUltraCheckBox.IsChecked == true;
-        await RunBusyAsync(() =>
+        await RunBusyAsync(async () =>
         {
-            var backupFolder = _configService.SetSolUltraVisibility(enabled);
-            OperationStatusText.Text = enabled
+            OperationStatusText.Text = T(
+                "正在关闭 Codex，然后安全写入 Ultra 启用请求…",
+                "Closing Codex before safely writing the Ultra enablement request...");
+            await _processService.StopAsync();
+
+            string? backupFolder;
+            try
+            {
+                backupFolder = _configService.RequestSolUltraEnablement();
+            }
+            catch
+            {
+                await _processService.StartAsync();
+                throw;
+            }
+
+            OperationStatusText.Text = T(
+                "Ultra 启用请求已写入，正在启动 Codex…",
+                "Ultra enablement was requested. Starting Codex...");
+            await _processService.StartAsync();
+            _solUltraAvailable = await WaitForSolUltraAvailabilityAsync();
+            OperationStatusText.Text = _solUltraAvailable
                 ? F(
-                    "已启用 Sol Ultra；重启 Codex 后生效。备份：{0}",
-                    "Sol Ultra is enabled. Restart Codex to apply it. Backup: {0}",
+                    "Sol Ultra 已可用。简体中文菜单中是最底部带“更快消耗使用额度”的“极高”。备份：{0}",
+                    "Sol Ultra is available. In Simplified Chinese it is the bottom item with the faster usage warning. Backup: {0}",
                     backupFolder ?? T("无需写入", "No write needed"))
                 : F(
-                    "已隐藏 Ultra；重启 Codex 后生效。备份：{0}",
-                    "Ultra is hidden. Restart Codex to apply it. Backup: {0}",
+                    "已请求启用 Ultra；Codex 仍在完成启动。备份：{0}",
+                    "Ultra enablement was requested; Codex is still finishing startup. Backup: {0}",
                     backupFolder ?? T("无需写入", "No write needed"));
-            return Task.CompletedTask;
         });
 
         RefreshSolUltraSetting();
         RefreshBackups();
+    }
+
+    private async Task<bool> WaitForSolUltraAvailabilityAsync()
+    {
+        for (var attempt = 0; attempt < 30; attempt++)
+        {
+            if (_configService.ReadSolUltraAvailability())
+            {
+                return true;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(400));
+        }
+
+        return false;
     }
 
     private async void UpdateActionButton_Click(object sender, RoutedEventArgs e)
@@ -639,15 +742,31 @@ public partial class MainWindow : Window
                 OperationStatusText.Text = T(
                     "正在切换到官方 Codex…",
                     "Switching to official Codex...");
-                var switchResult = _switchWorkflow.SwitchToOfficial(
-                    new OfficialSwitchRequest(
-                        _settings.OfficialModel,
-                        _settings.OfficialReviewModel));
+                var switchRequest = new OfficialSwitchRequest(
+                    _settings.OfficialModel,
+                    _settings.OfficialReviewModel);
+                var leavingKimi = IsKimiConfig(current);
+                var switchResult = await SwitchToOfficialFromCurrentConfigAsync(
+                    switchRequest,
+                    current);
+                RefreshLunaWorkerAgentStatus(switchResult.VerifiedStatus);
+                var activeKimiRestartWarning = _kimiRestartWarning;
                 OperationStatusText.Text = F(
-                    "已切换到官方 Codex。备份：{0}",
-                    "Switched to official Codex. Backup: {0}",
+                    leavingKimi
+                        ? "已切换到官方 Codex；随想 K3 配置写入时强制停止并重启了 Codex。备份：{0}"
+                        : "已切换到官方 Codex。备份：{0}",
+                    leavingKimi
+                        ? "Switched to official Codex; Codex was forcibly stopped and restarted while leaving SuiXiang K3. Backup: {0}"
+                        : "Switched to official Codex. Backup: {0}",
                     switchResult.BackupFolder);
-                await RestartIfRequestedAsync();
+                if (!string.IsNullOrWhiteSpace(activeKimiRestartWarning))
+                {
+                    OperationStatusText.Text += $" {activeKimiRestartWarning}";
+                }
+                if (!leavingKimi)
+                {
+                    await RestartIfRequestedAsync();
+                }
             }
 
             CompleteOnboarding();
@@ -659,11 +778,35 @@ public partial class MainWindow : Window
         var baseUrl = ConfigService.NormalizeBaseUrl(setup.BaseUrl);
         var model = setup.Model.Trim();
         var apiKey = setup.ApiKey?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(model) || apiKey.Length < 16)
+        if (string.IsNullOrWhiteSpace(model))
         {
             throw new InvalidOperationException(T(
-                "请填写模型和完整的新 API Key。",
-                "Enter a model and complete new API key."));
+                "请填写模型。",
+                "Enter a model."));
+        }
+
+        if (setup.ProviderKind == ProviderKinds.Kimi)
+        {
+            ValidateKimiModel(model);
+            if (apiKey.Length == 0)
+            {
+                apiKey = ResolveSavedKeyForExactBaseUrl(baseUrl);
+            }
+            else if (apiKey.Length < 16)
+            {
+                throw new InvalidOperationException(T(
+                    "请粘贴完整的新随想 API Key。",
+                    "Paste a complete new SuiXiang API key."));
+            }
+            await ApplyKimiSetupResultAsync(setup, baseUrl, model, apiKey);
+            return;
+        }
+
+        if (apiKey.Length < 16)
+        {
+            throw new InvalidOperationException(T(
+                "请填写完整的新 API Key。",
+                "Enter a complete new API key."));
         }
 
         OperationStatusText.Text = T(
@@ -690,6 +833,8 @@ public partial class MainWindow : Window
         };
         var target = CredentialTargetFactory.RequireValid(profile.CredentialTarget);
         var previousKey = CredentialVault.Read(target);
+        var currentConfig = _configService.ReadStatus();
+        var leavingKimiConfig = IsKimiConfig(currentConfig);
         var switched = false;
         try
         {
@@ -701,26 +846,37 @@ public partial class MainWindow : Window
             _settings.ThirdPartyModel = model;
 
             CredentialVault.Write(target, apiKey);
-            var switchResult = _switchWorkflow.SwitchToThirdParty(
+            var switchResult = await SwitchToThirdPartyFromCurrentConfigAsync(
                 new ThirdPartySwitchRequest(
                     model,
                     baseUrl,
                     TokenBrokerPath,
-                    target));
+                    target),
+                currentConfig);
             switched = true;
+            RefreshLunaWorkerAgentStatus(switchResult.VerifiedStatus);
 
             _settings.LastSuccessfulCompatibilityTestUtc = DateTimeOffset.UtcNow;
             _settings.LastTestedEndpointFingerprint =
                 ConnectionTestService.EndpointFingerprint(baseUrl, model);
             CompleteOnboarding();
             BaseUrlTextBox.Text = baseUrl;
-            ModelTextBox.Text = model;
+            ModelComboBox.Text = model;
+            var genericKimiRestartWarning = _kimiRestartWarning;
             OperationStatusText.Text = F(
-                "已连接 {0}；历史分区保持 {1}。备份：{2}",
-                "Connected to {0}; the history partition remains {1}. Backup: {2}",
+                leavingKimiConfig
+                    ? "已连接 {0}；离开随想 K3 时配置写入期间强制停止并重启了 Codex，历史分区保持 {1}。备份：{2}"
+                    : "已连接 {0}；历史分区保持 {1}。备份：{2}",
+                leavingKimiConfig
+                    ? "Connected to {0}; Codex was forcibly stopped and restarted while leaving SuiXiang K3. The history partition remains {1}. Backup: {2}"
+                    : "Connected to {0}; the history partition remains {1}. Backup: {2}",
                 profile.DisplayName,
                 AppPaths.StableProviderId,
                 switchResult.BackupFolder);
+            if (!string.IsNullOrWhiteSpace(genericKimiRestartWarning))
+            {
+                OperationStatusText.Text += $" {genericKimiRestartWarning}";
+            }
         }
         catch when (!switched)
         {
@@ -745,7 +901,236 @@ public partial class MainWindow : Window
 
         await RefreshStatusAsync();
         RefreshBackups();
-        await RestartIfRequestedAsync();
+        if (!leavingKimiConfig)
+        {
+            await RestartIfRequestedAsync();
+        }
+    }
+
+    private async Task ApplyKimiSetupResultAsync(
+        SetupWizardResult setup,
+        string upstreamBaseUrl,
+        string model,
+        string apiKey)
+    {
+        if (!SettingsStore.IsKimiBaseUrl(upstreamBaseUrl))
+        {
+            throw new InvalidOperationException(T(
+                "随想 K3 实验线路必须使用 https://sui-xiang.com/v1；本机路由器不会把凭据转发到其他上游。",
+                "The SuiXiang K3 experimental route requires https://sui-xiang.com/v1; the local router will not forward credentials to another upstream."));
+        }
+
+        var previousActiveProfileId = _settings.ActiveProviderProfileId;
+        var previousThirdPartyBaseUrl = _settings.ThirdPartyBaseUrl;
+        var previousThirdPartyModel = _settings.ThirdPartyModel;
+        var previousOfficialModel = _settings.OfficialModel;
+        var previousOfficialReviewModel = _settings.OfficialReviewModel;
+        var profile = SelectOrCreateProfileForSetup(
+            upstreamBaseUrl,
+            model,
+            out var createdProfile);
+        var before = CloneProviderProfile(profile);
+        var target = CredentialTargetFactory.RequireValid(profile.CredentialTarget);
+        var previousKey = CredentialVault.Read(target);
+        var current = _configService.ReadStatus();
+        if (current.Mode == ProviderMode.Official)
+        {
+            if (!string.IsNullOrWhiteSpace(current.Model))
+            {
+                _settings.OfficialModel = current.Model;
+            }
+
+            _settings.OfficialReviewModel = current.ReviewModel;
+        }
+
+        var switched = false;
+        try
+        {
+            profile.Kind = ProviderKinds.Kimi;
+            profile.DisplayName = ResolveSetupDisplayName(setup, upstreamBaseUrl);
+            profile.BaseUrl = upstreamBaseUrl;
+            profile.Model = model;
+            _settings.ThirdPartyBaseUrl = upstreamBaseUrl;
+            _settings.ThirdPartyModel = model;
+
+            CredentialVault.Write(target, apiKey);
+            var switchResult = await EnsureAndSwitchToKimiAsync(
+                model,
+                apiKey,
+                target);
+            switched = true;
+            RefreshLunaWorkerAgentStatus(switchResult.VerifiedStatus);
+
+            _settings.LastSuccessfulCompatibilityTestUtc = DateTimeOffset.UtcNow;
+            _settings.LastTestedEndpointFingerprint =
+                ConnectionTestService.EndpointFingerprint(
+                    AppPaths.KimiRouterBaseUrl,
+                    model);
+            CompleteOnboarding();
+            BaseUrlTextBox.Text = upstreamBaseUrl;
+            ModelComboBox.Text = model;
+            var kimiRestartWarning = _kimiRestartWarning;
+            OperationStatusText.Text = F(
+                "已连接随想 K3（实验）；配置写入时 Codex 已停止并强制重启，历史分区保持 {0}。备份：{1}",
+                "Connected to SuiXiang K3 (experimental); Codex was stopped and forcibly restarted for the write. The history partition remains {0}. Backup: {1}",
+                AppPaths.StableProviderId,
+                switchResult.BackupFolder);
+            if (!string.IsNullOrWhiteSpace(kimiRestartWarning))
+            {
+                OperationStatusText.Text += $" {kimiRestartWarning}";
+            }
+        }
+        catch when (!switched)
+        {
+            _settings.ThirdPartyBaseUrl = previousThirdPartyBaseUrl;
+            _settings.ThirdPartyModel = previousThirdPartyModel;
+            _settings.OfficialModel = previousOfficialModel;
+            _settings.OfficialReviewModel = previousOfficialReviewModel;
+            RestoreProviderProfile(profile, before, createdProfile, previousActiveProfileId);
+            if (previousKey is null)
+            {
+                CredentialVault.Delete(target);
+            }
+            else
+            {
+                CredentialVault.Write(target, previousKey);
+            }
+
+            throw;
+        }
+
+        await RefreshStatusAsync();
+        RefreshBackups();
+        // Kimi always restarts Codex around its catalog/config transaction;
+        // the generic RestartAfterSwitch preference is intentionally ignored.
+    }
+
+    private ProviderProfile SelectOrCreateProfileForSetup(
+        string normalizedBaseUrl,
+        string model,
+        out bool created)
+    {
+        var profile = FindProfileByBaseUrl(normalizedBaseUrl);
+        created = profile is null;
+        if (profile is null)
+        {
+            var profileId = Guid.NewGuid().ToString("N");
+            profile = new ProviderProfile
+            {
+                Id = profileId,
+                BaseUrl = normalizedBaseUrl,
+                Model = model,
+                CredentialTarget = CredentialTargetFactory.CreateForProfileId(profileId)
+            };
+            _settings.ProviderProfiles.Add(profile);
+        }
+        else
+        {
+            if (!Guid.TryParse(profile.Id, out _))
+            {
+                profile.Id = Guid.NewGuid().ToString("N");
+            }
+
+            if (!CredentialTargetFactory.IsValid(profile.CredentialTarget))
+            {
+                profile.CredentialTarget =
+                    CredentialTargetFactory.CreateForProfileId(profile.Id);
+            }
+        }
+
+        _settings.ActiveProviderProfileId = profile.Id;
+        return profile;
+    }
+
+    private ProviderProfile? FindProfileByBaseUrl(string normalizedBaseUrl) =>
+        _settings.ProviderProfiles.FirstOrDefault(candidate =>
+        {
+            try
+            {
+                return string.Equals(
+                    ConfigService.NormalizeBaseUrl(candidate.BaseUrl),
+                    normalizedBaseUrl,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+        });
+
+    private string ResolveSavedKeyForExactBaseUrl(string normalizedBaseUrl)
+    {
+        var profile = FindProfileByBaseUrl(normalizedBaseUrl);
+        if (profile is null ||
+            !CredentialTargetFactory.IsValid(profile.CredentialTarget))
+        {
+            throw new InvalidOperationException(T(
+                "该随想 Base URL 尚无已保存的 API Key，请粘贴新密钥。",
+                "No saved API key exists for this SuiXiang Base URL; paste a new key."));
+        }
+
+        return CredentialVault.Read(profile.CredentialTarget)
+            ?? throw new InvalidOperationException(T(
+                "该随想 Base URL 尚无已保存的 API Key，请粘贴新密钥。",
+                "No saved API key exists for this SuiXiang Base URL; paste a new key."));
+    }
+
+    private static ProviderProfile CloneProviderProfile(ProviderProfile profile) =>
+        new()
+        {
+            Id = profile.Id,
+            Kind = profile.Kind,
+            DisplayName = profile.DisplayName,
+            BaseUrl = profile.BaseUrl,
+            Model = profile.Model,
+            CredentialTarget = profile.CredentialTarget
+        };
+
+    private void RestoreProviderProfile(
+        ProviderProfile profile,
+        ProviderProfile before,
+        bool created,
+        string? previousActiveProfileId,
+        bool save = true)
+    {
+        if (created)
+        {
+            _settings.ProviderProfiles.Remove(profile);
+        }
+        else
+        {
+            profile.Id = before.Id;
+            profile.Kind = before.Kind;
+            profile.DisplayName = before.DisplayName;
+            profile.BaseUrl = before.BaseUrl;
+            profile.Model = before.Model;
+            profile.CredentialTarget = before.CredentialTarget;
+        }
+
+        _settings.ActiveProviderProfileId = previousActiveProfileId;
+        if (save)
+        {
+            _settingsStore.Save(_settings);
+        }
+    }
+
+    private static void RestoreCredential(
+        string credentialTarget,
+        string? previousKey)
+    {
+        if (!CredentialTargetFactory.IsValid(credentialTarget))
+        {
+            return;
+        }
+
+        if (previousKey is null)
+        {
+            CredentialVault.Delete(credentialTarget);
+        }
+        else
+        {
+            CredentialVault.Write(credentialTarget, previousKey);
+        }
     }
 
     private void CompleteOnboarding()
@@ -767,6 +1152,11 @@ public partial class MainWindow : Window
         if (setup.ProviderKind == ProviderKinds.SuiXiang)
         {
             return "SuiXiang";
+        }
+
+        if (setup.ProviderKind == ProviderKinds.Kimi)
+        {
+            return T("随想 K3（实验）", "SuiXiang K3 (experimental)");
         }
 
         return Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)
@@ -809,6 +1199,7 @@ public partial class MainWindow : Window
     {
         var status = _configService.ReadStatus();
         UpdateModeBadge(status);
+        RefreshLunaWorkerAgentStatus(status);
 
         CurrentRouteText.Text = status.Mode switch
         {
@@ -857,9 +1248,12 @@ public partial class MainWindow : Window
                 DailyPrimaryActionButton.Style = (Style)FindResource("PrimaryButton");
                 break;
             case ProviderMode.Official:
-                DailyPrimaryActionButton.Content = ActiveProviderProfile.Kind == ProviderKinds.SuiXiang
-                    ? T("连接随想", "Connect SuiXiang")
-                    : T("连接服务", "Connect a service");
+                DailyPrimaryActionButton.Content = ActiveProviderProfile.Kind switch
+                {
+                    ProviderKinds.SuiXiang => T("连接随想", "Connect SuiXiang"),
+                    ProviderKinds.Kimi => T("连接随想 K3（实验）", "Connect SuiXiang K3 (experimental)"),
+                    _ => T("连接服务", "Connect a service")
+                };
                 DailyPrimaryActionButton.Tag = "\uE8AB";
                 DailyPrimaryActionButton.Style = (Style)FindResource("PrimaryButton");
                 break;
@@ -888,6 +1282,17 @@ public partial class MainWindow : Window
         if (profile.Kind == ProviderKinds.SuiXiang)
         {
             return T("随想", "SuiXiang");
+        }
+
+        if ((profile.Kind == ProviderKinds.Kimi &&
+             SettingsStore.IsKimiBaseUrl(profile.BaseUrl) &&
+             string.Equals(
+                 profile.Model,
+                 AppPaths.DefaultKimiModel,
+                 StringComparison.Ordinal)) ||
+            SettingsStore.IsKimiLoopbackBaseUrl(status.BaseUrl))
+        {
+            return T("随想 K3（实验）", "SuiXiang K3 (experimental)");
         }
 
         if (!string.IsNullOrWhiteSpace(profile.DisplayName))
@@ -1308,17 +1713,253 @@ public partial class MainWindow : Window
                 "Requested official Codex to open. Initial phone pairing starts from “Set up Remote” in the sidebar when the account exposes it.");
     }
 
+    private async Task<ProviderSwitchResult> EnsureAndSwitchToKimiAsync(
+        string model,
+        string apiKey,
+        string credentialTarget)
+    {
+        ValidateKimiModel(model);
+        if (!File.Exists(AppPaths.ConfigPath))
+        {
+            throw new FileNotFoundException(T(
+                "未找到 Codex config.toml。请先启动一次官方 Codex 后再连接随想 K3。",
+                "Codex config.toml was not found. Start official Codex once before connecting SuiXiang K3."),
+                AppPaths.ConfigPath);
+        }
+
+        OperationStatusText.Text = T(
+            "正在确保本机随想 K3 路由器可用…",
+            "Ensuring the local SuiXiang K3 router is ready...");
+        var router = await _kimiRouterProcessService.EnsureRunningAsync(
+            KimiRouterExecutablePath,
+            CancellationToken.None);
+        if (!router.Success)
+        {
+            throw new InvalidOperationException(router.Summary);
+        }
+
+        OperationStatusText.Text = T(
+            "正在实时测试随想 K3 loopback Responses…",
+            "Running a live SuiXiang K3 loopback Responses test...");
+        var compatibility = await _connectionTestService.TestResponsesApiAsync(
+            AppPaths.KimiRouterBaseUrl,
+            model,
+            apiKey,
+            CancellationToken.None);
+        if (!compatibility.Success)
+        {
+            throw new InvalidOperationException(
+                DescribeKimiCompatibilityFailure(compatibility));
+        }
+
+        _kimiRestartWarning = null;
+        var codexStopped = false;
+        try
+        {
+            OperationStatusText.Text = T(
+                "正在关闭 Codex，并在停止期间生成随想 K3 模型目录、写入配置…",
+                "Stopping Codex; the SuiXiang K3 model catalog and route configuration will be written while it is stopped...");
+            await _processService.StopAsync();
+            codexStopped = true;
+            return _switchWorkflow.SwitchToKimi(
+                new KimiSwitchRequest(
+                    model,
+                    TokenBrokerPath,
+                    credentialTarget));
+        }
+        finally
+        {
+            if (codexStopped)
+            {
+                try
+                {
+                    OperationStatusText.Text = T(
+                        "随想 K3 配置已写入，正在强制重新启动 Codex…",
+                        "The SuiXiang K3 configuration was written; forcibly restarting Codex...");
+                    await _processService.StartAsync();
+                }
+                catch (Exception exception)
+                {
+                    // Keep the config/profile coherent after a successful write;
+                    // report startup failure without reverting only UI metadata.
+                    _kimiRestartWarning = F(
+                        "Codex 重新启动失败：{0}。请手动启动 Codex。",
+                        "Codex could not be restarted: {0}. Start Codex manually.",
+                        exception.Message);
+                    OperationStatusText.Text = _kimiRestartWarning;
+                }
+            }
+        }
+    }
+
+    private static string DescribeKimiCompatibilityFailure(
+        ConnectionTestResult result) =>
+        result.StatusCode switch
+        {
+            401 or 403 => T(
+                "随想 K3 loopback 测试被拒绝（API Key 或权限无效）。未切换线路。",
+                "The SuiXiang K3 loopback test was rejected (invalid API key or permission). The route was not switched."),
+            404 => T(
+                "随想 K3 loopback 返回 HTTP 404：模型可能不受支持。未切换线路。",
+                "The SuiXiang K3 loopback returned HTTP 404: the model may be unsupported. The route was not switched."),
+            502 or 503 => F(
+                "随想 K3 loopback 返回上游暂时不可用（HTTP {0}）。未切换线路，请稍后重试。",
+                "The SuiXiang K3 loopback upstream is temporarily unavailable (HTTP {0}). The route was not switched; retry later.",
+                result.StatusCode),
+            _ => F(
+                "随想 K3 loopback Responses 测试未通过：{0}。未切换线路。",
+                "The SuiXiang K3 loopback Responses test failed: {0}. The route was not switched.",
+                result.Summary)
+        };
+
     private async void SwitchThirdPartyButton_Click(object sender, RoutedEventArgs e)
     {
         await RunBusyAsync(async () =>
         {
-            SaveNonSecretSettings();
-            var key = ResolveAndOptionallySaveKey();
+            var previousActiveProfileId = _settings.ActiveProviderProfileId;
+            var previousThirdPartyBaseUrl = _settings.ThirdPartyBaseUrl;
+            var previousThirdPartyModel = _settings.ThirdPartyModel;
+            var previousRestartAfterSwitch = _settings.RestartAfterSwitch;
+            var previousStoredOfficialModel = _settings.OfficialModel;
+            var previousStoredOfficialReviewModel =
+                _settings.OfficialReviewModel;
+            var previousCompatibilityTestUtc =
+                _settings.LastSuccessfulCompatibilityTestUtc;
+            var previousCompatibilityFingerprint =
+                _settings.LastTestedEndpointFingerprint;
+            var displayedBaseUrl = ConfigService.NormalizeBaseUrl(BaseUrlTextBox.Text);
+            var previousDisplayedProfile = FindProfileByBaseUrl(displayedBaseUrl);
+            var previousDisplayedProfileSnapshot = previousDisplayedProfile is null
+                ? null
+                : CloneProviderProfile(previousDisplayedProfile);
+            var previousDisplayedKey = previousDisplayedProfile is null ||
+                                  !CredentialTargetFactory.IsValid(
+                                      previousDisplayedProfile.CredentialTarget)
+                ? null
+                : CredentialVault.Read(previousDisplayedProfile.CredentialTarget);
+            ProviderProfile? attemptedProfile = null;
+            string? selectedCredentialTarget = null;
+            var credentialMayHaveChanged = false;
+
+            void RestoreAttemptedProviderState()
+            {
+                attemptedProfile ??= FindProfileByBaseUrl(displayedBaseUrl);
+                if (attemptedProfile is not null)
+                {
+                    RestoreProviderProfile(
+                        attemptedProfile,
+                        previousDisplayedProfileSnapshot ??
+                        CloneProviderProfile(attemptedProfile),
+                        previousDisplayedProfileSnapshot is null,
+                        previousActiveProfileId,
+                        save: false);
+                }
+                else
+                {
+                    _settings.ActiveProviderProfileId = previousActiveProfileId;
+                }
+
+                _settings.ThirdPartyBaseUrl = previousThirdPartyBaseUrl;
+                _settings.ThirdPartyModel = previousThirdPartyModel;
+                _settings.RestartAfterSwitch = previousRestartAfterSwitch;
+                _settings.OfficialModel = previousStoredOfficialModel;
+                _settings.OfficialReviewModel =
+                    previousStoredOfficialReviewModel;
+                _settings.LastSuccessfulCompatibilityTestUtc =
+                    previousCompatibilityTestUtc;
+                _settings.LastTestedEndpointFingerprint =
+                    previousCompatibilityFingerprint;
+
+                if (credentialMayHaveChanged &&
+                    CredentialTargetFactory.IsValid(selectedCredentialTarget))
+                {
+                    RestoreCredential(
+                        selectedCredentialTarget!,
+                        previousDisplayedKey);
+                }
+
+                _settingsStore.Save(_settings);
+                BaseUrlTextBox.Text = _settings.ThirdPartyBaseUrl;
+                ModelComboBox.Text = _settings.ThirdPartyModel;
+                ApiKeyPasswordBox.Clear();
+                UpdatePersistedProviderCapabilityStatuses();
+            }
+
+            string key;
+            try
+            {
+                SaveNonSecretSettings();
+                attemptedProfile = ActiveProviderProfile;
+                selectedCredentialTarget = ActiveCredentialTarget;
+                credentialMayHaveChanged = true;
+                key = ResolveAndOptionallySaveKey();
+            }
+            catch
+            {
+                RestoreAttemptedProviderState();
+                throw;
+            }
+            if (IsKimiProviderProfile())
+            {
+                var currentKimi = _configService.ReadStatus();
+                var previousOfficialModel = _settings.OfficialModel;
+                var previousOfficialReviewModel = _settings.OfficialReviewModel;
+                if (currentKimi.Mode == ProviderMode.Official)
+                {
+                    if (!string.IsNullOrWhiteSpace(currentKimi.Model))
+                    {
+                        _settings.OfficialModel = currentKimi.Model;
+                    }
+
+                    _settings.OfficialReviewModel = currentKimi.ReviewModel;
+                }
+
+                ProviderSwitchResult kimiSwitch;
+                try
+                {
+                    kimiSwitch = await EnsureAndSwitchToKimiAsync(
+                        _settings.ThirdPartyModel,
+                        key,
+                        ActiveCredentialTarget);
+                }
+                catch
+                {
+                    _settings.OfficialModel = previousOfficialModel;
+                    _settings.OfficialReviewModel = previousOfficialReviewModel;
+                    RestoreAttemptedProviderState();
+                    throw;
+                }
+                _settings.RestartAfterSwitch = RestartCheckBox.IsChecked == true;
+                _settings.LastTestedEndpointFingerprint =
+                    ConnectionTestService.EndpointFingerprint(
+                        AppPaths.KimiRouterBaseUrl,
+                        _settings.ThirdPartyModel);
+                _settings.LastSuccessfulCompatibilityTestUtc = DateTimeOffset.UtcNow;
+                _settingsStore.Save(_settings);
+                RefreshLunaWorkerAgentStatus(kimiSwitch.VerifiedStatus);
+                var activeKimiRestartWarning = _kimiRestartWarning;
+                OperationStatusText.Text = F(
+                    "已切换到随想 K3（实验）；配置写入时 Codex 已停止并强制重启，历史分区保持 {0}。备份：{1}",
+                    "Switched to SuiXiang K3 (experimental); Codex was stopped and forcibly restarted for the write. The history partition remains {0}. Backup: {1}",
+                    AppPaths.StableProviderId,
+                    kimiSwitch.BackupFolder);
+                if (!string.IsNullOrWhiteSpace(activeKimiRestartWarning))
+                {
+                    OperationStatusText.Text += $" {activeKimiRestartWarning}";
+                }
+                await RefreshStatusAsync();
+                RefreshBackups();
+                // Kimi always restarts Codex around its catalog/config transaction;
+                // the generic RestartAfterSwitch preference is intentionally ignored.
+                return;
+            }
+            var suiXiangRoute = IsSuiXiangProviderProfile();
 
             var fingerprint = ConnectionTestService.EndpointFingerprint(
                 _settings.ThirdPartyBaseUrl,
                 _settings.ThirdPartyModel);
             var recentlyTested =
+                !suiXiangRoute &&
                 _settings.LastTestedEndpointFingerprint == fingerprint &&
                 _settings.LastSuccessfulCompatibilityTestUtc is not null &&
                 DateTimeOffset.UtcNow - _settings.LastSuccessfulCompatibilityTestUtc <
@@ -1336,14 +1977,28 @@ public partial class MainWindow : Window
                 }
                 catch
                 {
-                    ClearCurrentCompatibilityTestResult();
-                    _settingsStore.Save(_settings);
+                    RestoreAttemptedProviderState();
                     throw;
                 }
                 if (!result.Success)
                 {
-                    ClearCurrentCompatibilityTestResult();
-                    _settingsStore.Save(_settings);
+                    if (suiXiangRoute)
+                    {
+                        var suiXiangFailure =
+                            DescribeSuiXiangCompatibilityFailure(result);
+                        RestoreAttemptedProviderState();
+                        OperationStatusText.Text = suiXiangFailure;
+                        MessageBox.Show(
+                            this,
+                            suiXiangFailure,
+                            T(
+                                "随想兼容性未确认",
+                                "SuiXiang compatibility not confirmed"),
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
+                        return;
+                    }
+
                     var answer = MessageBox.Show(
                         this,
                         F(
@@ -1357,11 +2012,15 @@ public partial class MainWindow : Window
                         MessageBoxImage.Warning);
                     if (answer != MessageBoxResult.Yes)
                     {
+                        RestoreAttemptedProviderState();
                         OperationStatusText.Text = T(
                             "已取消切换；当前 Codex 配置未改动。",
                             "Switch cancelled; the current Codex configuration was not changed.");
                         return;
                     }
+
+                    ClearCurrentCompatibilityTestResult();
+                    _settingsStore.Save(_settings);
                 }
                 else
                 {
@@ -1383,23 +2042,138 @@ public partial class MainWindow : Window
                 _settingsStore.Save(_settings);
             }
 
-            var switchResult = _switchWorkflow.SwitchToThirdParty(
-                new ThirdPartySwitchRequest(
-                _settings.ThirdPartyModel,
-                _settings.ThirdPartyBaseUrl,
-                TokenBrokerPath,
-                ActiveCredentialTarget));
+            var leavingKimi = IsKimiConfig(current);
+            ProviderSwitchResult switchResult;
+            try
+            {
+                switchResult = await SwitchToThirdPartyFromCurrentConfigAsync(
+                    new ThirdPartySwitchRequest(
+                        _settings.ThirdPartyModel,
+                        _settings.ThirdPartyBaseUrl,
+                        TokenBrokerPath,
+                        selectedCredentialTarget),
+                    current);
+            }
+            catch
+            {
+                RestoreAttemptedProviderState();
+                throw;
+            }
+            RefreshLunaWorkerAgentStatus(switchResult.VerifiedStatus);
 
+            var kimiRestartWarning = _kimiRestartWarning;
             OperationStatusText.Text =
                 F(
-                    "已切换到第三方；历史分区保持 {0}。备份：{1}",
-                    "Switched to the third-party route; the history partition remains {0}. Backup: {1}",
+                    leavingKimi
+                        ? "已切换到第三方；离开随想 K3 时配置写入期间强制停止并重启了 Codex，历史分区保持 {0}。备份：{1}"
+                        : "已切换到第三方；历史分区保持 {0}。备份：{1}",
+                    leavingKimi
+                        ? "Switched to the third-party route; Codex was forcibly stopped and restarted while leaving SuiXiang K3. The history partition remains {0}. Backup: {1}"
+                        : "Switched to the third-party route; the history partition remains {0}. Backup: {1}",
                     AppPaths.StableProviderId,
                     switchResult.BackupFolder);
+            if (!string.IsNullOrWhiteSpace(kimiRestartWarning))
+            {
+                OperationStatusText.Text += $" {kimiRestartWarning}";
+            }
             await RefreshStatusAsync();
             RefreshBackups();
-            await RestartIfRequestedAsync();
+            if (!leavingKimi)
+            {
+                await RestartIfRequestedAsync();
+            }
         });
+    }
+
+    private bool IsSuiXiangProviderProfile()
+    {
+        var profile = ActiveProviderProfile;
+        return !IsKimiProviderProfile() &&
+               (profile.Kind == ProviderKinds.SuiXiang ||
+                IsSuiXiangBaseUrl(_settings.ThirdPartyBaseUrl));
+    }
+
+    private static string DescribeSuiXiangCompatibilityFailure(
+        ConnectionTestResult result)
+    {
+        return result.StatusCode switch
+        {
+            404 => T(
+                "随想返回 HTTP 404：当前模型或模型组可能不受支持。未写入配置；请刷新模型列表或改用随想当前提供的模型后重试。",
+                "SuiXiang returned HTTP 404: the model or model group may be unsupported. Nothing was written; refresh the model list or choose a model currently offered by SuiXiang, then retry."),
+            503 => T(
+                "随想返回 HTTP 503：当前模型或模型组可能暂不可用。未写入配置；请稍后重试或刷新模型列表。",
+                "SuiXiang returned HTTP 503: the model or model group may be temporarily unavailable. Nothing was written; retry later or refresh the model list."),
+            502 => T(
+                "随想返回 HTTP 502：上游或网络暂时不可用。未写入配置；请稍后重试。",
+                "SuiXiang returned HTTP 502: its upstream or network is temporarily unavailable. Nothing was written; retry later."),
+            _ => F(
+                "随想 Responses 兼容性测试未通过：{0}。未写入配置。",
+                "SuiXiang Responses compatibility test failed: {0}. Nothing was written.",
+                result.Summary)
+        };
+    }
+
+    private static bool IsKimiConfig(ConfigStatus status) =>
+        status.Mode == ProviderMode.ThirdParty &&
+        (string.Equals(
+             status.ModelCatalogJson,
+             AppPaths.KimiModelCatalogFileName,
+             StringComparison.Ordinal) ||
+         (status.BaseUrl is not null &&
+          SettingsStore.IsKimiLoopbackBaseUrl(status.BaseUrl)));
+
+    private Task<ProviderSwitchResult> SwitchToThirdPartyFromCurrentConfigAsync(
+        ThirdPartySwitchRequest request,
+        ConfigStatus current) =>
+        IsKimiConfig(current)
+            ? SwitchConfigWhileCodexStoppedAsync(
+                () => _switchWorkflow.SwitchToThirdParty(request))
+            : Task.FromResult(_switchWorkflow.SwitchToThirdParty(request));
+
+    private Task<ProviderSwitchResult> SwitchToOfficialFromCurrentConfigAsync(
+        OfficialSwitchRequest request,
+        ConfigStatus current) =>
+        IsKimiConfig(current)
+            ? SwitchConfigWhileCodexStoppedAsync(
+                () => _switchWorkflow.SwitchToOfficial(request))
+            : Task.FromResult(_switchWorkflow.SwitchToOfficial(request));
+
+    private async Task<ProviderSwitchResult> SwitchConfigWhileCodexStoppedAsync(
+        Func<ProviderSwitchResult> writeConfig)
+    {
+        _kimiRestartWarning = null;
+        var codexStopped = false;
+        try
+        {
+            OperationStatusText.Text = T(
+                "当前随想 K3 使用启动时模型目录；正在关闭 Codex 后写入新线路配置…",
+                "SuiXiang K3's model catalog is loaded at startup; stopping Codex before writing the new route...");
+            await _processService.StopAsync();
+            codexStopped = true;
+            return writeConfig();
+        }
+        finally
+        {
+            if (codexStopped)
+            {
+                try
+                {
+                    OperationStatusText.Text = T(
+                        "新线路配置已写入，正在强制重新启动 Codex…",
+                        "The new route configuration was written; forcibly restarting Codex...");
+                    await _processService.StartAsync();
+                }
+                catch (Exception exception)
+                {
+                    _kimiRestartWarning = F(
+                        "Codex 重新启动失败：{0}。请手动启动 Codex。",
+                        "Codex could not be restarted: {0}. Start Codex manually.",
+                        exception.Message);
+                    OperationStatusText.Text = _kimiRestartWarning;
+                }
+            }
+        }
     }
 
     private async void SwitchOfficialButton_Click(object sender, RoutedEventArgs e)
@@ -1408,19 +2182,35 @@ public partial class MainWindow : Window
         {
             _settings.RestartAfterSwitch = RestartCheckBox.IsChecked == true;
             _settingsStore.Save(_settings);
-            var switchResult = _switchWorkflow.SwitchToOfficial(
+            var current = _configService.ReadStatus();
+            var leavingKimi = IsKimiConfig(current);
+            var switchResult = await SwitchToOfficialFromCurrentConfigAsync(
                 new OfficialSwitchRequest(
-                _settings.OfficialModel,
-                _settings.OfficialReviewModel));
+                    _settings.OfficialModel,
+                    _settings.OfficialReviewModel),
+                current);
+            RefreshLunaWorkerAgentStatus(switchResult.VerifiedStatus);
 
+            var kimiRestartWarning = _kimiRestartWarning;
             OperationStatusText.Text =
                 F(
-                    "已切换到官方 OpenAI；官方登录凭据保持不变。备份：{0}",
-                    "Switched to official OpenAI; official sign-in credentials were preserved. Backup: {0}",
+                    leavingKimi
+                        ? "已切换到官方 OpenAI；离开随想 K3 时配置写入期间强制停止并重启了 Codex。官方登录凭据保持不变。备份：{0}"
+                        : "已切换到官方 OpenAI；官方登录凭据保持不变。备份：{0}",
+                    leavingKimi
+                        ? "Switched to official OpenAI; Codex was forcibly stopped and restarted while leaving SuiXiang K3. Official sign-in credentials were preserved. Backup: {0}"
+                        : "Switched to official OpenAI; official sign-in credentials were preserved. Backup: {0}",
                     switchResult.BackupFolder);
+            if (!string.IsNullOrWhiteSpace(kimiRestartWarning))
+            {
+                OperationStatusText.Text += $" {kimiRestartWarning}";
+            }
             await RefreshStatusAsync();
             RefreshBackups();
-            await RestartIfRequestedAsync();
+            if (!leavingKimi)
+            {
+                await RestartIfRequestedAsync();
+            }
         });
     }
 
@@ -1555,7 +2345,7 @@ public partial class MainWindow : Window
     private void SaveNonSecretSettings()
     {
         var normalizedBaseUrl = ConfigService.NormalizeBaseUrl(BaseUrlTextBox.Text);
-        var model = ModelTextBox.Text.Trim();
+        var model = ModelComboBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(model))
         {
             throw new InvalidOperationException(T(
@@ -1563,10 +2353,22 @@ public partial class MainWindow : Window
                 "The third-party model cannot be empty."));
         }
 
+        var kimiBridge = SettingsStore.IsKimiBaseUrl(normalizedBaseUrl) &&
+                          string.Equals(
+                              model,
+                              AppPaths.DefaultKimiModel,
+                              StringComparison.Ordinal);
+        if (kimiBridge)
+        {
+            ValidateKimiModel(model);
+        }
+
         var profile = SelectOrCreateProfileForProviderFields(normalizedBaseUrl, model);
-        profile.Kind = IsSuiXiangBaseUrl(normalizedBaseUrl)
-            ? ProviderKinds.SuiXiang
-            : ProviderKinds.Custom;
+        profile.Kind = kimiBridge
+            ? ProviderKinds.Kimi
+            : IsSuiXiangBaseUrl(normalizedBaseUrl)
+                ? ProviderKinds.SuiXiang
+                : ProviderKinds.Custom;
         profile.BaseUrl = normalizedBaseUrl;
         profile.Model = model;
         if (profile.Kind == ProviderKinds.Custom &&
@@ -1647,6 +2449,157 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ProviderModelComboBox_SelectionChanged(
+        object sender,
+        SelectionChangedEventArgs e)
+    {
+        if (_isInitialized)
+        {
+            UpdatePersistedProviderCapabilityStatuses();
+        }
+    }
+
+    private void ProviderModelComboBox_LostFocus(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (_isInitialized)
+        {
+            UpdatePersistedProviderCapabilityStatuses();
+        }
+    }
+
+    private async void RefreshModelsButton_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        await RunBusyAsync(async () =>
+        {
+            var normalizedBaseUrl = ConfigService.NormalizeBaseUrl(BaseUrlTextBox.Text);
+            var currentModel = ModelComboBox.Text.Trim();
+            var key = ResolveKeyForModelDiscovery(normalizedBaseUrl);
+            ModelDiscoveryStatusText.Text = T(
+                "正在读取服务提供的模型列表…",
+                "Reading the model list from the service...");
+            OperationStatusText.Text = ModelDiscoveryStatusText.Text;
+
+            var result = await _modelDiscoveryService.DiscoverAsync(
+                normalizedBaseUrl,
+                key,
+                CancellationToken.None);
+            if (!result.Success)
+            {
+                ModelDiscoveryStatusText.Text = result.Summary;
+                OperationStatusText.Text = result.Summary;
+                return;
+            }
+
+            var models = result.Models
+                .Where(model => !string.IsNullOrWhiteSpace(model))
+                .Select(model => model.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var kimiDiscovery = SettingsStore.IsKimiBaseUrl(normalizedBaseUrl) &&
+                                string.Equals(
+                                    currentModel,
+                                    AppPaths.DefaultKimiModel,
+                                    StringComparison.Ordinal);
+            if (kimiDiscovery)
+            {
+                models = models
+                    .Where(model => string.Equals(
+                        model,
+                        AppPaths.DefaultKimiModel,
+                        StringComparison.Ordinal))
+                    .ToList();
+                if (!models.Contains(AppPaths.DefaultKimiModel, StringComparer.Ordinal))
+                {
+                    models.Insert(0, AppPaths.DefaultKimiModel);
+                }
+            }
+            ModelComboBox.Items.Clear();
+            foreach (var model in models)
+            {
+                ModelComboBox.Items.Add(model);
+            }
+
+            // Keep the user's current text even when the provider did not
+            // advertise it. Compatibility is still confirmed by a live test.
+            ModelComboBox.Text = currentModel;
+            var currentIsListed = currentModel.Length > 0 &&
+                                   models.Any(model => string.Equals(
+                                       model,
+                                       currentModel,
+                                       StringComparison.OrdinalIgnoreCase));
+            ModelDiscoveryStatusText.Text = kimiDiscovery
+                ? currentIsListed
+                    ? T(
+                        "随想 K3 实验线路当前仅支持 k3；自定义模型 ID 已禁用。",
+                        "The SuiXiang K3 experimental route supports only k3; custom model IDs are disabled.")
+                    : F(
+                        "随想 K3 实验线路当前仅支持 k3；已保留当前模型“{0}”，连接时会拒绝其他模型。",
+                        "The SuiXiang K3 experimental route currently supports only k3; kept the current model \"{0}\", but connecting with another model is rejected.",
+                        currentModel)
+                : currentIsListed || currentModel.Length == 0
+                ? F(
+                    "已发现 {0} 个模型；仍可手动输入自定义模型 ID。",
+                    "Discovered {0} models; you can still enter a custom model ID.",
+                    models.Count)
+                : F(
+                    "已发现 {0} 个模型；已保留当前模型“{1}”，它仍需通过实时兼容性测试。",
+                    "Discovered {0} models; kept the current model \"{1}\". It still needs a live compatibility test.",
+                    models.Count,
+                    currentModel);
+            OperationStatusText.Text = ModelDiscoveryStatusText.Text;
+        });
+    }
+
+    private string ResolveKeyForModelDiscovery(string normalizedBaseUrl)
+    {
+        // Resolve the profile by the URL first. Never fall back to the active
+        // profile's credential when the URL points at another service.
+        var profile = _settings.ProviderProfiles.FirstOrDefault(candidate =>
+        {
+            try
+            {
+                return string.Equals(
+                    ConfigService.NormalizeBaseUrl(candidate.BaseUrl),
+                    normalizedBaseUrl,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+        });
+
+        var entered = ApiKeyPasswordBox.Password.Trim();
+        if (!string.IsNullOrWhiteSpace(entered))
+        {
+            if (entered.Length < 16)
+            {
+                throw new InvalidOperationException(T(
+                    "请输入新生成的完整 API Key。",
+                    "Enter the complete newly generated API key."));
+            }
+
+            return entered;
+        }
+
+        if (profile is null)
+        {
+            throw new InvalidOperationException(T(
+                "这个 Base URL 尚无已保存的密钥。请先输入属于该服务的新 API Key；不会复用其他线路的密钥。",
+                "This Base URL has no saved key. Enter a new key for this service; a key from another route will never be reused."));
+        }
+
+        var target = CredentialTargetFactory.RequireValid(profile.CredentialTarget);
+        return CredentialVault.Read(target)
+            ?? throw new InvalidOperationException(T(
+                "当前 Base URL 尚未保存 API Key。请先输入属于该服务的新密钥。",
+                "No API key is saved for the current Base URL. Enter a new key for this service."));
+    }
+
     private string ResolveAndOptionallySaveKey()
     {
         var entered = ApiKeyPasswordBox.Password.Trim();
@@ -1676,6 +2629,19 @@ public partial class MainWindow : Window
             _settings.ThirdPartyBaseUrl,
             _settings.ThirdPartyModel,
             key);
+
+    private static void ValidateKimiModel(string model)
+    {
+        if (!string.Equals(
+                model.Trim(),
+                AppPaths.DefaultKimiModel,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(T(
+                "随想 K3 实验线路当前只支持 k3；请从模型列表选择 k3。",
+                "The SuiXiang K3 experimental route currently supports only k3; choose k3 from the model list."));
+        }
+    }
 
     private async Task RefreshCapabilitiesAsync()
     {
@@ -1769,7 +2735,7 @@ public partial class MainWindow : Window
         {
             var displayedBaseUrl =
                 ConfigService.NormalizeBaseUrl(BaseUrlTextBox.Text);
-            var displayedModel = ModelTextBox.Text.Trim();
+            var displayedModel = ModelComboBox.Text.Trim();
             if (!string.IsNullOrWhiteSpace(displayedModel))
             {
                 displayedToolFingerprint =
@@ -1826,6 +2792,22 @@ public partial class MainWindow : Window
             HasGeneratedImage()
                 ? ResourceBrush("ThirdPartyStatusBrush")
                 : ResourceBrush("NeutralStatusBrush");
+        UpdateKimiUi();
+    }
+
+    private void UpdateKimiUi()
+    {
+        var kimi = IsKimiProviderProfile();
+        KimiExperimentalNoticeText.Visibility = kimi
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        ModelComboBox.IsEditable = !kimi;
+        KimiExperimentalNoticeText.Text = T(
+            "随想 K3 实验线路仅支持 k3：随想 API Key 只按此 Base URL 的凭据槽使用；本机路由器健康检查、模型目录和 loopback Responses 测试必须全部通过。当前不承诺图片、Remote 或 Codex 原生插件能力。",
+            "The SuiXiang K3 experimental route supports only k3: the SuiXiang API key is used only from this Base URL's credential slot; router health, the model catalog, and a loopback Responses test must all pass. Images, Remote, and native Codex plugin capabilities are not promised.");
+        SwitchThirdPartyButton.Content = kimi
+            ? T("切换到随想 K3", "Switch to SuiXiang K3")
+            : T("切换到第三方", "Switch to third-party");
     }
 
     private void ClearCurrentToolTestResult()
@@ -1935,6 +2917,7 @@ public partial class MainWindow : Window
     private void SetBusy(bool busy)
     {
         _isBusy = busy;
+        var lunaRouteStatus = _configService.ReadStatus();
         SaveKeyButton.IsEnabled = !busy;
         DeleteKeyButton.IsEnabled = !busy;
         TestConnectionButton.IsEnabled = !busy;
@@ -1953,7 +2936,8 @@ public partial class MainWindow : Window
         DarkThemeButton.IsEnabled = !busy;
         SystemThemeButton.IsEnabled = !busy;
         BaseUrlTextBox.IsEnabled = !busy;
-        ModelTextBox.IsEnabled = !busy;
+        ModelComboBox.IsEnabled = !busy;
+        RefreshModelsButton.IsEnabled = !busy;
         ApiKeyPasswordBox.IsEnabled = !busy;
         RestartCheckBox.IsEnabled = !busy;
         RefreshBackupsButton.IsEnabled = !busy;
@@ -1963,9 +2947,12 @@ public partial class MainWindow : Window
         OpenDataFolderButton.IsEnabled = !busy;
         OpenGitHubButton.IsEnabled = !busy;
         RunSetupAgainButton.IsEnabled = !busy;
-        SolUltraCheckBox.IsEnabled = !busy;
+        EnableSolUltraButton.IsEnabled = !busy && !_solUltraAvailable;
         InstallLunaWorkerButton.IsEnabled =
-            !busy && _lunaWorkerAgentStatus?.State == ManagedAgentState.Missing;
+            !busy &&
+            lunaRouteStatus.Mode != ProviderMode.Unknown &&
+            !LunaWorkerAgentService.IsSuiXiangRoute(lunaRouteStatus) &&
+            _lunaWorkerAgentStatus?.State == ManagedAgentState.Missing;
         OpenLunaAgentsFolderButton.IsEnabled = !busy;
         UpdateActionButton.IsEnabled = !busy && !_isCheckingForUpdates;
         OpenUpdateReleaseButton.IsEnabled = !busy;
@@ -2044,10 +3031,27 @@ public partial class MainWindow : Window
             "选择线路并管理第三方 Responses API。切换不会改变聊天历史分区。",
             "Choose a route and manage the third-party Responses API. Switching never changes the chat-history partition.");
         ThirdPartyTitleText.Text = T("第三方线路", "Third-party route");
+        KimiExperimentalNoticeText.Text = T(
+            "随想 K3 实验线路仅支持 k3：随想 API Key 只按此 Base URL 的凭据槽使用；本机路由器健康检查、模型目录和 loopback Responses 测试必须全部通过。当前不承诺图片、Remote 或 Codex 原生插件能力。",
+            "The SuiXiang K3 experimental route supports only k3: the SuiXiang API key is used only from this Base URL's credential slot; router health, the model catalog, and a loopback Responses test must all pass. Images, Remote, and native Codex plugin capabilities are not promised.");
         KeyStorageDescriptionText.Text = T(
             "密钥保存在 Windows 凭据管理器；不会写进 config.toml、源码或日志。",
             "The key is stored in Windows Credential Manager and is never written to config.toml, source code, or logs.");
+        BaseUrlLabelText.Text = T("Base URL", "Base URL");
         ModelLabelText.Text = T("模型", "Model");
+        RefreshModelsButton.Content = T("刷新模型列表", "Refresh model list");
+        RefreshModelsButton.ToolTip = T(
+            "使用当前 Base URL 对应的密钥读取模型列表；不会跨线路复用密钥。",
+            "Read models with the key for the current Base URL; keys are never reused across routes.");
+        AutomationProperties.SetName(
+            RefreshModelsButton,
+            T("刷新模型列表", "Refresh model list"));
+        if (string.IsNullOrWhiteSpace(ModelDiscoveryStatusText.Text))
+        {
+            ModelDiscoveryStatusText.Text = T(
+                "可刷新模型列表，也可以直接输入自定义模型 ID。",
+                "Refresh the model list, or enter a custom model ID directly.");
+        }
         ApiKeyLabelText.Text = T("新 API Key", "New API key");
         SaveKeyButton.Content = T("保存密钥", "Save key");
         DeleteKeyButton.Content = T("删除密钥", "Delete key");
@@ -2119,14 +3123,14 @@ public partial class MainWindow : Window
             "Run the first-time setup wizard again");
         SolUltraTitleText.Text = "Sol Ultra";
         SolUltraDescriptionText.Text = T(
-            "在 Codex 模型选择器中显示 gpt-5.6-sol 的 Ultra 档位；Luna 任务 Agent 仍使用 Max。",
-            "Show the Ultra option for gpt-5.6-sol in the Codex model picker; the Luna task agent remains on Max.");
+            "简体中文 Codex 会把 xhigh 和 Ultra 都显示为“极高”。Ultra 是菜单最底部带“更快消耗使用额度”的一项；Luna Agent 仍使用 Max。",
+            "Simplified Chinese Codex labels both xhigh and Ultra as 'Extremely high'. Ultra is the bottom item with the faster usage warning; the Luna task agent remains on Max.");
         LunaWorkerTitleText.Text = T(
             "Luna 任务 Agent",
             "Luna task agent");
         LunaWorkerDescriptionText.Text = T(
-            "可选安装 Luna 任务 Agent（gpt-5.6-luna / max）；不切换线路或改动聊天记录。第三方线路需支持该模型。",
-            "Optionally install the Luna task agent (gpt-5.6-luna / max). It does not switch routes or change chat history; third-party routes must support this model.");
+            "可选安装 Luna 任务 Agent（gpt-5.6-luna / max）。官方 OpenAI 支持；随想不支持并会自动停用；其他第三方由供应商决定。切回官方后自动恢复。",
+            "Optionally install the Luna task agent (gpt-5.6-luna / max). Official OpenAI supports it; the agent is automatically disabled on SuiXiang. Support on other third-party routes depends on the provider, and the agent is restored when leaving SuiXiang.");
         UpdateCheckTitleText.Text = T("应用更新", "Application updates");
         UpdateCheckDescriptionText.Text = T(
             "启动后自动检查 GitHub 最新正式版本；也可以随时手动检查。",
@@ -2156,8 +3160,9 @@ public partial class MainWindow : Window
         LightThemeButton.ToolTip = T("使用浅色外观", "Use light appearance");
         DarkThemeButton.ToolTip = T("使用深色外观", "Use dark appearance");
         SystemThemeButton.ToolTip = T("跟随 Windows 外观", "Follow Windows appearance");
-        UpdateSolUltraStatus(SolUltraCheckBox.IsChecked == true);
+        UpdateSolUltraStatus();
         UpdateLunaWorkerAgentStatus();
+        UpdateKimiUi();
         UpdateUpdateCheckUi();
         UpdateLanguageButtons();
         UpdateThemeButtons();
@@ -2180,7 +3185,7 @@ public partial class MainWindow : Window
 
     private static Version CurrentApplicationVersion() =>
         GitHubReleaseUpdateService.NormalizeVersion(
-            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 3, 5));
+            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 4, 0));
 
     private Brush ResourceBrush(string key) =>
         (Brush)FindResource(key);
