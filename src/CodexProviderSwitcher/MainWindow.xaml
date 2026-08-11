@@ -132,7 +132,7 @@
                                    VerticalAlignment="Center" />
                         <TextBlock x:Name="VersionText"
                                    Grid.Column="2"
-                                   Text="v1.3.5"
+                                   Text="v1.4.0"
                                    Foreground="{DynamicResource SubtleTextBrush}"
                                    FontSize="10"
                                    Margin="8,0,0,0"
@@ -512,10 +512,45 @@
                             <TextBlock x:Name="ModelLabelText"
                                        Text="模型"
                                        Style="{StaticResource FieldLabelStyle}" />
-                            <TextBox x:Name="ModelTextBox"
-                                     Grid.Column="1"
-                                     AutomationProperties.LabeledBy="{Binding ElementName=ModelLabelText}"
-                                     TextChanged="ProviderSettingsTextBox_TextChanged" />
+                            <Grid Grid.Column="1">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ComboBox x:Name="ModelComboBox"
+                                          IsEditable="True"
+                                          IsTextSearchEnabled="False"
+                                          MinHeight="36"
+                                          Padding="8,4"
+                                          FontSize="13"
+                                          Background="{DynamicResource InputBrush}"
+                                          Foreground="{DynamicResource TextBrush}"
+                                          BorderBrush="{DynamicResource BorderBrush}"
+                                          BorderThickness="1"
+                                          AutomationProperties.LabeledBy="{Binding ElementName=ModelLabelText}"
+                                          SelectionChanged="ProviderModelComboBox_SelectionChanged"
+                                          LostFocus="ProviderModelComboBox_LostFocus" />
+                                <Button x:Name="RefreshModelsButton"
+                                        Grid.Column="1"
+                                        Content="刷新模型列表"
+                                        Tag="&#xE72C;"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Margin="8,0,0,0"
+                                        VerticalAlignment="Center"
+                                        Click="RefreshModelsButton_Click" />
+                                <TextBlock x:Name="ModelDiscoveryStatusText"
+                                           Grid.Row="1"
+                                           Grid.ColumnSpan="2"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontSize="11"
+                                           TextWrapping="Wrap"
+                                           Margin="0,6,0,0"
+                                           AutomationProperties.LiveSetting="Polite" />
+                            </Grid>
                         </Grid>
 
                         <Grid Grid.Row="4" Margin="0,0,0,14">
@@ -549,6 +584,13 @@
                                            Foreground="{DynamicResource MutedTextBrush}"
                                            FontSize="12"
                                            TextWrapping="Wrap"
+                                           AutomationProperties.LiveSetting="Polite" />
+                                <TextBlock x:Name="KimiExperimentalNoticeText"
+                                           Foreground="{DynamicResource WarningBrush}"
+                                           FontSize="12"
+                                           TextWrapping="Wrap"
+                                           Margin="0,7,0,0"
+                                           Visibility="Collapsed"
                                            AutomationProperties.LiveSetting="Polite" />
                             </StackPanel>
                         </Grid>
@@ -1048,7 +1090,7 @@
                                            FontWeight="SemiBold"
                                            FontSize="13" />
                                 <TextBlock x:Name="SolUltraDescriptionText"
-                                           Text="在 Codex 模型选择器中显示 gpt-5.6-sol 的 Ultra 档位；Luna Agent 仍使用 Max。"
+                                           Text="简体中文 Codex 会把 xhigh 和 Ultra 都显示为“极高”。Ultra 是最底部带“更快消耗使用额度”的一项。"
                                            Style="{StaticResource PageLeadStyle}"
                                            Margin="0,2,0,0"
                                            TextWrapping="Wrap" />
@@ -1063,12 +1105,12 @@
                                            HorizontalAlignment="Right"
                                            Margin="0,0,0,6"
                                            AutomationProperties.LiveSetting="Polite" />
-                                <CheckBox x:Name="SolUltraCheckBox"
-                                          Style="{StaticResource SwitchStyle}"
-                                          AutomationProperties.LabeledBy="{Binding ElementName=SolUltraTitleText}"
-                                          HorizontalAlignment="Right"
-                                          Checked="SolUltraCheckBox_Changed"
-                                          Unchecked="SolUltraCheckBox_Changed" />
+                                <Button x:Name="EnableSolUltraButton"
+                                        Content="启用并重启 Codex"
+                                        Tag="&#xE895;"
+                                        Style="{StaticResource SecondaryButton}"
+                                        HorizontalAlignment="Right"
+                                        Click="EnableSolUltraButton_Click" />
                             </StackPanel>
                         </Grid>
                     </Border>
@@ -1088,7 +1130,7 @@
                                            FontWeight="SemiBold"
                                            FontSize="13" />
                                 <TextBlock x:Name="LunaWorkerDescriptionText"
-                                           Text="可选安装 Luna 任务 Agent；不切换线路或改动聊天记录。第三方线路需支持 gpt-5.6-luna。"
+                                           Text="可选安装 Luna 任务 Agent。官方 OpenAI 支持；随想不支持并会自动停用；其他第三方由供应商决定。"
                                            Style="{StaticResource PageLeadStyle}"
                                            Margin="0,2,0,0"
                                            TextWrapping="Wrap" />
@@ -1175,7 +1217,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Margin="0,0,20,0">
                                 <TextBlock x:Name="SettingsVersionText"
-                                           Text="Codex Provider Switcher v1.3.5"
+                                           Text="Codex Provider Switcher v1.4.0"
                                            FontWeight="SemiBold"
                                            FontSize="13" />
                                 <TextBlock x:Name="SettingsStorageDescriptionText"

@@ -6,6 +6,11 @@ public sealed record ThirdPartySwitchRequest(
     string TokenBrokerWindowsPath,
     string CredentialTarget);
 
+public sealed record KimiSwitchRequest(
+    string Model,
+    string TokenBrokerWindowsPath,
+    string CredentialTarget);
+
 public sealed record OfficialSwitchRequest(
     string Model,
     string? ReviewModel);
@@ -18,10 +23,14 @@ public sealed record ProviderSwitchResult(
 public sealed class ProviderSwitchWorkflowService
 {
     private readonly ConfigService _configService;
+    private readonly KimiModelCatalogService _kimiModelCatalogService;
 
-    public ProviderSwitchWorkflowService(ConfigService? configService = null)
+    public ProviderSwitchWorkflowService(
+        ConfigService? configService = null,
+        KimiModelCatalogService? kimiModelCatalogService = null)
     {
         _configService = configService ?? new ConfigService();
+        _kimiModelCatalogService = kimiModelCatalogService ?? new KimiModelCatalogService();
     }
 
     public ProviderSwitchResult SwitchToThirdParty(
@@ -32,6 +41,8 @@ public sealed class ProviderSwitchWorkflowService
         ArgumentException.ThrowIfNullOrWhiteSpace(request.BaseUrl);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.TokenBrokerWindowsPath);
         CredentialTargetFactory.RequireValid(request.CredentialTarget);
+        var expectedBaseUrl = ConfigService.NormalizeBaseUrl(request.BaseUrl);
+        var expectedModel = request.Model.Trim();
 
         return WriteAndVerify(
             original => _configService.BuildThirdPartyConfig(
@@ -44,6 +55,18 @@ public sealed class ProviderSwitchWorkflowService
                 status.Mode == ProviderMode.ThirdParty &&
                 status.ProviderId == AppPaths.StableProviderId &&
                 string.Equals(
+                    status.Model,
+                    expectedModel,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    status.ReviewModel,
+                    expectedModel,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    status.BaseUrl,
+                    expectedBaseUrl,
+                    StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(
                     status.CredentialTarget,
                     request.CredentialTarget,
                     StringComparison.Ordinal),
@@ -55,6 +78,10 @@ public sealed class ProviderSwitchWorkflowService
         string? configPath = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Model);
+        var expectedModel = request.Model.Trim();
+        var expectedReviewModel = string.IsNullOrWhiteSpace(request.ReviewModel)
+            ? null
+            : request.ReviewModel.Trim();
 
         return WriteAndVerify(
             original => _configService.BuildOfficialConfig(
@@ -64,8 +91,81 @@ public sealed class ProviderSwitchWorkflowService
             status =>
                 status.Mode == ProviderMode.Official &&
                 status.ProviderId == AppPaths.StableProviderId &&
-                status.UsesOfficialAuthentication,
+                status.UsesOfficialAuthentication &&
+                string.Equals(
+                    status.Model,
+                    expectedModel,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    status.ReviewModel,
+                    expectedReviewModel,
+                    StringComparison.Ordinal),
             configPath);
+    }
+
+    public ProviderSwitchResult SwitchToKimi(
+        KimiSwitchRequest request,
+        string? configPath = null,
+        string? codexHome = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.Model);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.TokenBrokerWindowsPath);
+        CredentialTargetFactory.RequireValid(request.CredentialTarget);
+        var expectedModel = request.Model.Trim();
+        var expectedBaseUrl = ConfigService.NormalizeBaseUrl(
+            AppPaths.KimiRouterBaseUrl);
+
+        var catalogPath = KimiModelCatalogService.GetCatalogPath(codexHome);
+        var catalogExisted = File.Exists(catalogPath);
+        var previousCatalog = catalogExisted ? File.ReadAllBytes(catalogPath) : null;
+        try
+        {
+            _kimiModelCatalogService.EnsureCatalog(expectedModel, codexHome);
+            return WriteAndVerify(
+                original => _configService.BuildKimiConfig(
+                    original,
+                    request.Model,
+                    request.TokenBrokerWindowsPath,
+                    request.CredentialTarget),
+                status =>
+                    status.Mode == ProviderMode.ThirdParty &&
+                    status.ProviderId == AppPaths.StableProviderId &&
+                    string.Equals(status.Model, expectedModel, StringComparison.Ordinal) &&
+                    string.Equals(status.ReviewModel, expectedModel, StringComparison.Ordinal) &&
+                    string.Equals(status.BaseUrl, expectedBaseUrl, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(
+                        status.ModelCatalogJson,
+                        AppPaths.KimiModelCatalogFileName,
+                        StringComparison.Ordinal) &&
+                    string.Equals(
+                        status.CredentialTarget,
+                        request.CredentialTarget,
+                        StringComparison.Ordinal),
+                configPath);
+        }
+        catch (Exception exception)
+        {
+            try
+            {
+                if (catalogExisted)
+                {
+                    AtomicFile.WriteAllBytes(catalogPath, previousCatalog!);
+                }
+                else if (File.Exists(catalogPath))
+                {
+                    File.Delete(catalogPath);
+                }
+            }
+            catch (Exception rollbackException)
+            {
+                throw new AggregateException(
+                    "The Kimi switch failed and the previous model catalog could not be restored.",
+                    exception,
+                    rollbackException);
+            }
+
+            throw;
+        }
     }
 
     private ProviderSwitchResult WriteAndVerify(

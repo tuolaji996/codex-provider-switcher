@@ -6,6 +6,7 @@ public enum ManagedAgentState
 {
     Missing,
     Installed,
+    Disabled,
     Conflict
 }
 
@@ -14,6 +15,8 @@ public sealed record ManagedAgentStatus(ManagedAgentState State, string Path)
     public bool IsMissing => State == ManagedAgentState.Missing;
 
     public bool IsInstalled => State == ManagedAgentState.Installed;
+
+    public bool IsDisabled => State == ManagedAgentState.Disabled;
 
     public bool IsConflict => State == ManagedAgentState.Conflict;
 }
@@ -45,26 +48,104 @@ public sealed class LunaWorkerAgentService
     public ManagedAgentStatus Inspect()
     {
         var path = AppPaths.LunaWorkerAgentPath;
-        if (!File.Exists(path))
+        if (File.Exists(path))
         {
-            return new ManagedAgentStatus(
-                Directory.Exists(path)
-                    ? ManagedAgentState.Conflict
-                    : ManagedAgentState.Missing,
-                path);
+            return InspectManagedFile(path, ManagedAgentState.Installed);
         }
 
-        var content = File.ReadAllText(path);
-        var state = Normalize(content) == Normalize(Template)
-            ? ManagedAgentState.Installed
-            : ManagedAgentState.Conflict;
-        return new ManagedAgentStatus(state, path);
+        if (Directory.Exists(path))
+        {
+            return new ManagedAgentStatus(ManagedAgentState.Conflict, path);
+        }
+
+        var disabledPath = AppPaths.DisabledLunaWorkerAgentPath;
+        if (File.Exists(disabledPath))
+        {
+            return InspectManagedFile(disabledPath, ManagedAgentState.Disabled);
+        }
+
+        return new ManagedAgentStatus(
+            Directory.Exists(disabledPath)
+                ? ManagedAgentState.Conflict
+                : ManagedAgentState.Missing,
+            path);
+    }
+
+    public ManagedAgentStatus Reconcile(ConfigStatus configStatus)
+    {
+        ArgumentNullException.ThrowIfNull(configStatus);
+
+        if (IsSuiXiangRoute(configStatus))
+        {
+            return DisableForUnsupportedProvider();
+        }
+
+        return configStatus.Mode is ProviderMode.Official or ProviderMode.ThirdParty
+            ? RestoreManagedAgent()
+            : Inspect();
+    }
+
+    public static bool IsSuiXiangRoute(ConfigStatus configStatus) =>
+        configStatus.Mode == ProviderMode.ThirdParty &&
+        Uri.TryCreate(configStatus.BaseUrl, UriKind.Absolute, out var uri) &&
+        uri.Host.Equals("sui-xiang.com", StringComparison.OrdinalIgnoreCase);
+
+    public ManagedAgentStatus DisableForUnsupportedProvider()
+    {
+        var current = Inspect();
+        if (!current.IsInstalled)
+        {
+            return current;
+        }
+
+        var disabledPath = AppPaths.DisabledLunaWorkerAgentPath;
+        if (File.Exists(disabledPath) || Directory.Exists(disabledPath))
+        {
+            return new ManagedAgentStatus(ManagedAgentState.Conflict, disabledPath);
+        }
+
+        try
+        {
+            File.Move(current.Path, disabledPath, overwrite: false);
+        }
+        catch (Exception exception) when (IsFileAccessException(exception))
+        {
+            return new ManagedAgentStatus(ManagedAgentState.Conflict, disabledPath);
+        }
+
+        return Inspect();
+    }
+
+    public ManagedAgentStatus RestoreManagedAgent()
+    {
+        var current = Inspect();
+        if (!current.IsDisabled)
+        {
+            return current;
+        }
+
+        var activePath = AppPaths.LunaWorkerAgentPath;
+        if (File.Exists(activePath) || Directory.Exists(activePath))
+        {
+            return new ManagedAgentStatus(ManagedAgentState.Conflict, activePath);
+        }
+
+        try
+        {
+            File.Move(current.Path, activePath, overwrite: false);
+        }
+        catch (Exception exception) when (IsFileAccessException(exception))
+        {
+            return new ManagedAgentStatus(ManagedAgentState.Conflict, activePath);
+        }
+
+        return Inspect();
     }
 
     public ManagedAgentStatus Install()
     {
         var current = Inspect();
-        if (current.IsInstalled)
+        if (current.IsInstalled || current.IsDisabled)
         {
             return current;
         }
@@ -127,5 +208,28 @@ public sealed class LunaWorkerAgentService
             .Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace('\r', '\n')
             .TrimEnd('\n');
+
+    private static ManagedAgentStatus InspectManagedFile(
+        string path,
+        ManagedAgentState managedState)
+    {
+        try
+        {
+            var content = File.ReadAllText(path);
+            return new ManagedAgentStatus(
+                Normalize(content) == Normalize(Template)
+                    ? managedState
+                    : ManagedAgentState.Conflict,
+                path);
+        }
+        catch (Exception exception) when (IsFileAccessException(exception))
+        {
+            return new ManagedAgentStatus(ManagedAgentState.Conflict, path);
+        }
+    }
+
+    private static bool IsFileAccessException(Exception exception) =>
+        exception is IOException or UnauthorizedAccessException or
+        System.Security.SecurityException;
 
 }

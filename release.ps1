@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = "1.3.5",
+    [string]$Version = "1.4.0",
     [string]$DotNet = "dotnet"
 )
 
@@ -16,7 +16,8 @@ $checksum = Join-Path $releaseRoot "$packageName.sha256"
 
 $versionProjects = @(
     (Join-Path $root "src\CodexProviderSwitcher\CodexProviderSwitcher.csproj"),
-    (Join-Path $root "src\CodexProviderToken\CodexProviderToken.csproj")
+    (Join-Path $root "src\CodexProviderToken\CodexProviderToken.csproj"),
+    (Join-Path $root "src\CodexProviderKimiRouter\CodexProviderKimiRouter.csproj")
 )
 foreach ($projectPath in $versionProjects) {
     [xml]$project = Get-Content -LiteralPath $projectPath -Raw
@@ -42,6 +43,10 @@ Copy-Item `
 foreach ($requiredFile in @(
     "CodexProviderSwitcher.exe",
     "CodexProviderToken.exe",
+    "CodexProviderKimiRouter.exe",
+    "CodexProviderKimiRouter.dll",
+    "CodexProviderKimiRouter.deps.json",
+    "CodexProviderKimiRouter.runtimeconfig.json",
     "WebView2Loader.dll",
     "install.ps1",
     "README.md",

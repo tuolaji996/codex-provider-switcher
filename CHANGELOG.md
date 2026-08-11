@@ -4,6 +4,65 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-10
+
+### Added
+
+- The bilingual setup wizard and Providers page now offer editable model
+  ComboBoxes, a URL-scoped **Refresh model list** action, and status guidance
+  that preserves a missing current model until a live compatibility test.
+- The experimental SuiXiang K3 route uses the bundled loopback router and
+  managed model catalog with a SuiXiang credential profile. The first
+  supported model is `k3`; other SuiXiang models remain direct Responses
+  routes, while the bridge rejects custom K3 model IDs.
+- The release package includes `CodexProviderKimiRouter.exe` and its framework-
+  dependent runtime files.
+
+### Fixed
+
+- SuiXiang model discovery is dynamic and every SuiXiang switch performs a
+  fresh Responses compatibility test. All failures fail closed with model,
+  model-group, or upstream guidance; SuiXiang never offers write-anyway.
+- SuiXiang K3 live validation runs before the Codex stop. Catalog/config mutation
+  then occurs while Codex is stopped, with a forced restart afterward
+  regardless of the generic restart preference. Leaving SuiXiang K3 for official or another
+  provider follows the same startup-cache-safe stop/write/start transaction.
+- SuiXiang K3 router startup health checks can recover a missing bundled process
+  without putting API keys or secrets in process arguments.
+- The official OpenAI route keeps the managed Luna task agent available, while
+  the SuiXiang route parks it because SuiXiang no longer exposes
+  `gpt-5.6-luna`. Switching back to official restores the exact managed Agent
+  file before Codex restarts; other custom providers remain provider-dependent.
+- Ultra readiness now follows `[desktop].enabled-reasoning-efforts` instead of
+  treating `show-ultra-in-model-picker-slider` as a persistent on/off value.
+  The Settings action closes Codex before writing the one-shot request, then
+  relaunches Codex and waits for the durable Ultra state.
+- A per-session single-instance guard prevents duplicate Switcher windows from
+  racing over the same local configuration, and the installer waits for old
+  Switcher/router processes before replacing the application directory.
+
+### Safety
+
+- Credentials remain scoped to the selected upstream Base URL/profile and are
+  never reused across model discovery requests for another URL.
+- SuiXiang K3 intentionally does not promise images, Mobile Remote, or native Codex
+  plugin/app transports; the official route and stable OpenAI history partition
+  are unchanged.
+- Only a Luna file whose content exactly matches the Switcher-managed template
+  is parked or restored. A user-owned or conflicting file is never moved or
+  overwritten, and Luna remains `gpt-5.6-luna / max` without fallback.
+
+### Verified
+
+- WPF UI, Core, router, and router protocol projects build with the provided
+  .NET 8 SDK; release script version checks include all three executables.
+- Fake-upstream loopback tests cover Bearer forwarding, non-streaming and SSE
+  success, upstream HTTP failure, malformed SSE, and truncated SSE without
+  reporting a failed response as completed.
+- Self-tests cover SuiXiang Luna parking and official restoration, protect
+  conflicting user-owned Agent files, and distinguish the one-shot Ultra
+  request from durable Ultra availability.
+
 ## [1.3.5] - 2026-08-08
 
 ### Added

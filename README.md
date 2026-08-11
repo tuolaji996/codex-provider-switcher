@@ -3,7 +3,8 @@
 A native Windows WPF application that switches Codex between:
 
 - the existing official ChatGPT/OpenAI login; and
-- an OpenAI-compatible third-party Responses API.
+- an OpenAI-compatible third-party Responses API; or
+- the experimental SuiXiang K3 route through the bundled loopback adapter.
 
 The switcher deliberately keeps `model_provider = "OpenAI"` in both modes. Codex
 stores the provider ID in its thread index, so changing that ID creates separate
@@ -33,12 +34,20 @@ and to select Light, Dark, or System appearance. Both choices are remembered.
 On a new install, the application opens a short bilingual setup flow. It first
 checks the Codex configuration, WebView2 availability, current route, and
 managed credential reference without reading an API key or changing any
-setting. It then offers three equally valid choices:
+setting. It then offers four equally valid choices:
 
 - **Sign in with SuiXiang** opens SuiXiang's real sign-in page in an isolated
   WebView2 profile. The user completes any Tencent CAPTCHA personally. The app
   does not read passwords, CAPTCHA data, or cookies. After sign-in, the user
   creates an API key with SuiXiang and pastes it into the app.
+- **Connect SuiXiang K3 (experimental)** uses a SuiXiang API key for **`k3`**.
+  An existing key saved for the exact normalized SuiXiang Base URL can be
+  reused by leaving the key field blank; a key from any other URL is never
+  reused. The app health-checks and starts the bundled local router, builds its
+  managed model catalog, runs a live loopback Responses test, then stops and
+  restarts Codex around the startup-only catalog/config write. Other SuiXiang
+  model IDs remain ordinary direct Responses routes; only `k3` uses the
+  experimental bridge.
 - **Use another service** accepts an OpenAI-compatible Base URL, model, and a
   newly generated API key.
 - **Use official Codex for now** keeps the current official route unchanged.
@@ -62,9 +71,17 @@ deletes anything merely by opening or cancelling the guide. Connecting a new
 provider requires its own explicitly supplied API key; official sign-in,
 history, and backups are not removed.
 
+The Providers and setup model fields are editable ComboBoxes for ordinary
+custom providers. **Refresh model list** resolves the credential for the
+currently entered Base URL only, never reusing a key from another profile. A
+missing current model is retained and called out as still requiring a live
+compatibility test. SuiXiang refreshes its list dynamically and every switch
+performs a fresh Responses compatibility test; any SuiXiang failure is fail
+closed, with no write-anyway option. SuiXiang K3 discovery is limited to `k3`.
+
 ## Interface
 
-Version 1.3.5 uses a compact native Windows workspace:
+Version 1.4.0 uses a compact native Windows workspace:
 
 - **Home:** current route, shared-history health, and quick switching.
 - **Providers:** official OpenAI and third-party endpoint, model, and key
@@ -72,8 +89,20 @@ Version 1.3.5 uses a compact native Windows workspace:
 - **Diagnostics:** official host, plugin tool protocol, image generation, and
   Mobile Remote prerequisites.
 - **Backups:** a read-only table of every timestamped `config.toml` backup.
-- **Settings:** language, appearance, restart behavior, Sol Ultra visibility,
+- **Settings:** language, appearance, restart behavior, Sol Ultra readiness,
   optional Luna task agent, automatic update status, and local data access.
+
+The SuiXiang K3 route is experimental and intentionally limited to text Responses and
+ordinary function tools. It does not promise image generation, Mobile Remote,
+or native Codex plugin/app transports. Its API key remains scoped to the
+SuiXiang upstream profile while Codex itself talks only to the local
+`127.0.0.1:17866/v1` router.
+
+In Simplified Chinese Codex builds, xhigh and Ultra can both appear as `极高`.
+Ultra is the bottom item with the `更快消耗使用额度` warning. The switcher checks
+the durable `enabled-reasoning-efforts` list; the native
+`show-ultra-in-model-picker-slider` value is only a one-shot enablement request
+and normally returns to `false` after Codex consumes it.
 
 The navigation pane collapses to icons at narrow window sizes. All operational
 status remains visible in the bottom status bar.
@@ -103,6 +132,8 @@ silently; the user chooses the release asset from GitHub.
 - Session JSONL files and chat bodies are not rewritten during provider switches.
 - The GUI requires a complete `/v1/responses` SSE result because Codex does not
   use the Chat Completions wire protocol for custom providers.
+- SuiXiang K3 switching starts the bundled router only after a local health check; the
+  router is launched without API keys or secrets in command-line arguments.
 
 An API key pasted into a chat must be considered exposed. Revoke it at the
 provider and create a new one before saving it in this app.
@@ -142,19 +173,28 @@ Settings can install a narrowly scoped Codex task-agent definition at
 bounded delegated tasks. Installation is optional and does not change
 `config.toml`, the active provider, official authentication, or chat history.
 
-The switcher manages only the exact file it created. If a different
-`luna-worker.toml` already exists, it reports a conflict and leaves that file
-untouched. Other agent definitions are never changed. A third-party route can
-run this agent only when that provider supports the `gpt-5.6-luna` model; the
-switcher does not translate or silently replace the model.
+The switcher manages only the exact file it created. The official OpenAI route
+supports this managed Luna agent. SuiXiang currently does not, so when switching
+to SuiXiang the managed file is parked as
+`luna-worker.toml.disabled-by-provider-switcher`; switching back to official
+restores it automatically. Other custom providers are provider-dependent: the
+switcher does not automatically label them unsupported or substitute another
+model. If a different `luna-worker.toml` already exists, the switcher reports a
+conflict and leaves it untouched. Other agent definitions are never changed.
 
-## Sol Ultra visibility
+## Sol Ultra readiness
 
-Settings can show or hide Ultra in the Codex model picker by updating only
-`[desktop].show-ultra-in-model-picker-slider` in `config.toml`. Sol supports
-Ultra in Codex; the optional Luna task agent remains on Max. The switcher does
-not write `model_reasoning_effort = "ultra"`, change the current model, switch
-providers, or modify chat history. Restart Codex after changing this setting.
+Settings reports Ultra as ready when `ultra` is present in
+`[desktop].enabled-reasoning-efforts`. If it is missing, the one-click action
+closes Codex, writes the native one-shot
+`show-ultra-in-model-picker-slider = true` request with a backup, and relaunches
+Codex. Codex normally consumes that request and resets it to `false`; this does
+not mean Ultra was disabled.
+
+Sol supports Ultra in Codex; the optional Luna task agent remains on Max. The
+switcher does not write `model_reasoning_effort = "ultra"`, change the selected
+model, or modify chat history. In Simplified Chinese Codex, the bottom `极高`
+option with the `更快消耗使用额度` warning is Ultra.
 
 OpenAI references:
 
@@ -178,6 +218,13 @@ OpenAI references:
   out or delete device pairings.
 - The endpoint must support `/v1/responses` and SSE streaming. A
   Chat-Completions-only endpoint is not compatible.
+- SuiXiang K3 is an experimental adapter for `k3` only. The router's managed
+  catalog is startup-loaded, so SuiXiang K3 switches and switches away from
+  SuiXiang K3 always stop and restart Codex even when the generic restart
+  preference is disabled.
+- SuiXiang K3 currently has no image, Mobile Remote, or native Codex plugin/app
+  capability guarantee; other SuiXiang models and ordinary custom providers
+  retain direct Responses behavior and editable model IDs.
 - The default endpoint and model are examples and can be changed in the GUI.
 - Provider traffic can contain prompts, source code, and tool context. The
   third-party provider's privacy, retention, billing, and availability policies
@@ -196,7 +243,7 @@ already included on the target machine. A .NET 8 SDK is needed only to build.
 To create the versioned ZIP and SHA-256 file used by GitHub Releases:
 
 ```powershell
-.\release.ps1 -Version 1.3.5 -DotNet "C:\path\to\dotnet.exe"
+.\release.ps1 -Version 1.4.0 -DotNet "C:\path\to\dotnet.exe"
 ```
 
 The installed files are placed in:
