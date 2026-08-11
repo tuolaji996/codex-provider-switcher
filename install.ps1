@@ -89,8 +89,9 @@ function Invoke-WslKimiLauncher {
         [Parameter(Mandatory = $true)]
         [string]$LauncherWindowsPath,
         [Parameter(Mandatory = $true)]
-        [ValidateSet("--ensure-only", "--stop")]
-        [string]$Action
+        [ValidateSet("--ensure-only", "--stop", "--stop-router")]
+        [string]$Action,
+        [string]$RouterWindowsPath
     )
 
     if (-not (Test-Path -LiteralPath $LauncherWindowsPath -PathType Leaf)) {
@@ -102,9 +103,24 @@ function Invoke-WslKimiLauncher {
     }
 
     $launcherWslPath = Convert-ToWslPath -WindowsPath $LauncherWindowsPath
+    $arguments = @(
+        "--exec",
+        "/bin/sh",
+        ('"{0}"' -f $launcherWslPath),
+        $Action
+    )
+    if ($Action -eq "--stop-router") {
+        if ([string]::IsNullOrWhiteSpace($RouterWindowsPath)) {
+            throw "The installed K3 router path is required for recovery stop."
+        }
+
+        $routerWslPath = Convert-ToWslPath -WindowsPath $RouterWindowsPath
+        $arguments += ('"{0}"' -f $routerWslPath)
+    }
+
     $process = Start-Process `
         -FilePath "wsl.exe" `
-        -ArgumentList @("--exec", "/bin/sh", $launcherWslPath, $Action) `
+        -ArgumentList $arguments `
         -NoNewWindow `
         -Wait `
         -PassThru
@@ -189,7 +205,8 @@ catch {
 }
 
 $k3WasActive = Test-KimiConfigurationActive
-$oldWslLauncher = Join-Path $installDirectory $wslLauncherName
+$stagedWslLauncher = Join-Path $stageDirectory $wslLauncherName
+$installedLinuxRouter = Join-Path $installDirectory $linuxRouterRelativePath
 try {
     # Use exact process names only. The GUI and router are the only processes
     # owned by this installation that can lock the directory being replaced.
@@ -199,9 +216,15 @@ try {
     Stop-AndWaitForProcess `
         -ProcessName "CodexProviderKimiRouter" `
         -DisplayName "Codex Provider Kimi Router"
-    Invoke-WslKimiLauncher `
-        -LauncherWindowsPath $oldWslLauncher `
-        -Action "--stop"
+    if (Test-Path -LiteralPath $installedLinuxRouter -PathType Leaf) {
+        # Always use the known-good launcher from the staged package. An older
+        # installed launcher can be missing, malformed, or checked out with
+        # CRLF and must not be able to block its own repair.
+        Invoke-WslKimiLauncher `
+            -LauncherWindowsPath $stagedWslLauncher `
+            -Action "--stop-router" `
+            -RouterWindowsPath $installedLinuxRouter
+    }
 }
 catch {
     if (Test-Path -LiteralPath $stageDirectory) {

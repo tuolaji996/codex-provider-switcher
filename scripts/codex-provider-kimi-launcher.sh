@@ -14,6 +14,7 @@ HEALTH_URL="http://127.0.0.1:17866/health"
 
 MODE=token
 CREDENTIAL_TARGET=
+STOP_ROUTER_OVERRIDE=
 
 usage_error() {
     printf '%s\n' 'K3 launcher arguments are invalid.' >&2
@@ -44,11 +45,29 @@ while [ "$#" -gt 0 ]; do
             MODE=stop
             shift
             ;;
+        --stop-router)
+            [ "$MODE" = token ] || usage_error
+            [ "$#" -ge 2 ] || usage_error
+            MODE=stop
+            STOP_ROUTER_OVERRIDE=$2
+            shift 2
+            ;;
         *)
             usage_error
             ;;
     esac
 done
+
+if [ -n "$STOP_ROUTER_OVERRIDE" ]; then
+    case "$STOP_ROUTER_OVERRIDE" in
+        /mnt/*/AppData/Local/Programs/CodexProviderSwitcher/linux-x64/CodexProviderKimiRouter)
+            ROUTER=$STOP_ROUTER_OVERRIDE
+            ;;
+        *)
+            usage_error
+            ;;
+    esac
+fi
 
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR" 2>/dev/null || true
