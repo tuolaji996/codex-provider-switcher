@@ -54,6 +54,9 @@ jobs:
           $requiredFiles = @(
             "artifacts/publish/CodexProviderSwitcher.exe",
             "artifacts/publish/CodexProviderToken.exe",
+            "artifacts/publish/CodexProviderKimiRouter.exe",
+            "artifacts/publish/codex-provider-kimi-launcher.sh",
+            "artifacts/publish/linux-x64/CodexProviderKimiRouter",
             "artifacts/publish/WebView2Loader.dll"
           )
 

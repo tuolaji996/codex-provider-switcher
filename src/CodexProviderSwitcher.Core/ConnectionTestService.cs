@@ -82,6 +82,80 @@ public sealed partial class ConnectionTestService
             transport.StatusCode);
     }
 
+    /// <summary>
+    /// Verifies the upstream Chat Completions contract used by the K3 adapter.
+    /// This deliberately targets the provider endpoint rather than Windows
+    /// loopback: the actual Responses adapter runs in Codex's WSL namespace.
+    /// </summary>
+    public async Task<ConnectionTestResult> TestChatCompletionsApiAsync(
+        string baseUrl,
+        string model,
+        string apiKey,
+        CancellationToken cancellationToken = default)
+    {
+        var payload = new
+        {
+            model = model.Trim(),
+            messages = new[]
+            {
+                new
+                {
+                    role = "user",
+                    content = "Reply with exactly OK."
+                }
+            },
+            max_tokens = 16,
+            stream = false
+        };
+        var transport = await PostJsonAsync(
+            $"{ConfigService.NormalizeBaseUrl(baseUrl)}/chat/completions",
+            payload,
+            apiKey,
+            TimeSpan.FromSeconds(60),
+            cancellationToken).ConfigureAwait(false);
+        if (!transport.Success)
+        {
+            return new ConnectionTestResult(
+                false,
+                DescribeJsonFailure(transport, "Chat Completions API"),
+                transport.StatusCode);
+        }
+
+        try
+        {
+            using var response = JsonDocument.Parse(transport.Body!);
+            var choices = response.RootElement.GetProperty("choices");
+            if (choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0)
+            {
+                throw new JsonException();
+            }
+
+            var message = choices[0].GetProperty("message");
+            if (!message.TryGetProperty("content", out var content) ||
+                content.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(content.GetString()))
+            {
+                throw new JsonException();
+            }
+        }
+        catch (JsonException)
+        {
+            return new ConnectionTestResult(
+                false,
+                T(
+                    "Chat Completions 返回成功，但没有可用的 assistant 文本。",
+                    "Chat Completions succeeded but did not return usable assistant text."),
+                transport.StatusCode);
+        }
+
+        return new ConnectionTestResult(
+            true,
+            T(
+                "连接成功：随想 K3 上游 Chat Completions、认证与文本输出均可用。",
+                "Connection succeeded: the SuiXiang K3 upstream Chat Completions endpoint, authentication, and text output are available."),
+            transport.StatusCode);
+    }
+
     public async Task<ConnectionTestResult> TestFunctionCallingAsync(
         string baseUrl,
         string model,

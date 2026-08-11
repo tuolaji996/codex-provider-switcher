@@ -242,7 +242,14 @@ public sealed partial class ConfigService
         string tokenBrokerWindowsPath,
         string credentialTarget)
     {
-        var brokerWslPath = ToWslPath(tokenBrokerWindowsPath);
+        var brokerDirectory = Path.GetDirectoryName(tokenBrokerWindowsPath)
+            ?? throw new ArgumentException(
+                "The token broker path has no parent directory.",
+                nameof(tokenBrokerWindowsPath));
+        var launcherWindowsPath = Path.Combine(
+            brokerDirectory,
+            AppPaths.KimiWslLauncherFileName);
+        var launcherWslPath = ToWslPath(launcherWindowsPath);
         credentialTarget = CredentialTargetFactory.RequireValid(credentialTarget);
         var managedBlock = $"""
             {ManagedComment}
@@ -252,10 +259,10 @@ public sealed partial class ConfigService
             wire_api = "responses"
 
             [model_providers.{AppPaths.StableProviderId}.auth]
-            command = "{EscapeToml(brokerWslPath)}"
-            args = ["--credential-target", "{EscapeToml(credentialTarget)}", "--ensure-kimi-router"]
+            command = "/bin/sh"
+            args = ["{EscapeToml(launcherWslPath)}", "--credential-target", "{EscapeToml(credentialTarget)}"]
             timeout_ms = 20000
-            refresh_interval_ms = 0
+            refresh_interval_ms = {AppPaths.KimiAuthRefreshIntervalMilliseconds}
             """;
 
         return Rewrite(

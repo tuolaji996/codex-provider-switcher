@@ -23,6 +23,10 @@ public static class AppPaths
     public const string KimiModelCatalogRelativePath = KimiModelCatalogFileName;
     public const string KimiRouterExecutableName = "CodexProviderKimiRouter.exe";
     public const string KimiRouterExeName = KimiRouterExecutableName;
+    public const string KimiLinuxRouterDirectoryName = "linux-x64";
+    public const string KimiLinuxRouterExecutableName = "CodexProviderKimiRouter";
+    public const string KimiWslLauncherFileName = "codex-provider-kimi-launcher.sh";
+    public const int KimiAuthRefreshIntervalMilliseconds = 30000;
     public const string DefaultOfficialModel = "gpt-5.6-sol";
     public const string CodexAppId = "OpenAI.Codex_2p2nqsd0c76g0!App";
 

@@ -8,6 +8,7 @@ $artifacts = Join-Path $root "artifacts"
 $publish = Join-Path $artifacts "publish"
 $tokenPublish = Join-Path $artifacts "token"
 $routerPublish = Join-Path $artifacts "kimi-router"
+$linuxRouterPublish = Join-Path $artifacts "kimi-router-linux-x64"
 
 function Invoke-DotNet {
     param(
@@ -49,6 +50,7 @@ if (Test-Path -LiteralPath $artifacts) {
 New-Item -ItemType Directory -Path $publish -Force | Out-Null
 New-Item -ItemType Directory -Path $tokenPublish -Force | Out-Null
 New-Item -ItemType Directory -Path $routerPublish -Force | Out-Null
+New-Item -ItemType Directory -Path $linuxRouterPublish -Force | Out-Null
 
 Invoke-DotNet @(
     "publish",
@@ -89,6 +91,22 @@ Invoke-DotNet @(
     $routerPublish
 )
 
+Invoke-DotNet @(
+    "publish",
+    (Join-Path $root "src\CodexProviderKimiRouter\CodexProviderKimiRouter.csproj"),
+    "-c",
+    "Release",
+    "-r",
+    "linux-x64",
+    "--self-contained",
+    "true",
+    "-p:PublishSingleFile=true",
+    "-p:DebugSymbols=false",
+    "-p:DebugType=None",
+    "-o",
+    $linuxRouterPublish
+)
+
 $routerOutput = @(Get-ChildItem -LiteralPath $routerPublish -File)
 $routerExecutable = $routerOutput |
     Where-Object { $_.Name -eq "CodexProviderKimiRouter.exe" } |
@@ -117,6 +135,30 @@ foreach ($routerFile in $routerOutput |
         -Destination (Join-Path $publish $routerFile.Name) `
         -Force
 }
+
+$linuxRouterExecutable = Join-Path $linuxRouterPublish "CodexProviderKimiRouter"
+if (-not (Test-Path -LiteralPath $linuxRouterExecutable -PathType Leaf)) {
+    throw "Published Linux Kimi router was not found: $linuxRouterExecutable"
+}
+
+$packagedLinuxRouterDirectory = Join-Path $publish "linux-x64"
+New-Item `
+    -ItemType Directory `
+    -Path $packagedLinuxRouterDirectory `
+    -Force | Out-Null
+Copy-Item `
+    -LiteralPath $linuxRouterExecutable `
+    -Destination (Join-Path $packagedLinuxRouterDirectory "CodexProviderKimiRouter") `
+    -Force
+
+$kimiLauncher = Join-Path $root "scripts\codex-provider-kimi-launcher.sh"
+if (-not (Test-Path -LiteralPath $kimiLauncher -PathType Leaf)) {
+    throw "K3 WSL launcher was not found: $kimiLauncher"
+}
+Copy-Item `
+    -LiteralPath $kimiLauncher `
+    -Destination (Join-Path $publish "codex-provider-kimi-launcher.sh") `
+    -Force
 
 Copy-Item `
     -LiteralPath (Join-Path $tokenPublish "CodexProviderToken.exe") `

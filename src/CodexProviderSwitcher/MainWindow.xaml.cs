@@ -36,7 +36,7 @@ public partial class MainWindow : Window
     private readonly SessionHealthService _sessionHealthService = new();
     private readonly ConnectionTestService _connectionTestService = new();
     private readonly ModelDiscoveryService _modelDiscoveryService = new();
-    private readonly KimiRouterProcessService _kimiRouterProcessService = new();
+    private readonly WslKimiRouterService _wslKimiRouterService = new();
     private readonly HostCapabilityDiagnosticsService _hostDiagnosticsService = new();
     private readonly CodexProcessService _processService = new();
     private readonly LunaWorkerAgentService _lunaWorkerAgentService = new();
@@ -56,6 +56,12 @@ public partial class MainWindow : Window
     private bool _isCheckingForUpdates;
     private bool _solUltraAvailable;
     private string? _kimiRestartWarning;
+    private bool _isRefreshingProviderProfiles;
+    // The picker is deliberately a draft selector.  A saved account is not
+    // made active just because the user looked at it; the active profile is
+    // updated only after a provider switch has completed successfully.
+    private string? _selectedProviderProfileId;
+    private bool _isNewProviderProfileDraft;
 
     public MainWindow()
     {
@@ -69,24 +75,43 @@ public partial class MainWindow : Window
     private string TokenBrokerPath =>
         Path.Combine(AppContext.BaseDirectory, "CodexProviderToken.exe");
 
-    private string KimiRouterExecutablePath =>
-        Path.Combine(AppContext.BaseDirectory, AppPaths.KimiRouterExecutableName);
+    private string KimiWslLauncherPath =>
+        Path.Combine(AppContext.BaseDirectory, AppPaths.KimiWslLauncherFileName);
 
     private ProviderProfile ActiveProviderProfile =>
         _settings.EnsureActiveProviderProfile();
 
     private string ActiveCredentialTarget => ActiveProviderProfile.CredentialTarget;
 
+    private ProviderProfile? SelectedProviderProfile =>
+        !string.IsNullOrWhiteSpace(_selectedProviderProfileId)
+            ? _settings.ProviderProfiles.FirstOrDefault(profile =>
+                string.Equals(
+                    profile.Id,
+                    _selectedProviderProfileId,
+                    StringComparison.Ordinal))
+            : null;
+
+    private ProviderProfile? DraftProviderProfile =>
+        _isNewProviderProfileDraft ? null : SelectedProviderProfile;
+
     private bool IsKimiProviderProfile()
     {
-        var profile = ActiveProviderProfile;
-        return profile.Kind == ProviderKinds.Kimi &&
+        return IsKimiProfile(ActiveProviderProfile);
+    }
+
+    private static bool IsKimiProfile(ProviderProfile profile) =>
+        profile.Kind == ProviderKinds.Kimi &&
                SettingsStore.IsKimiBaseUrl(profile.BaseUrl) &&
                string.Equals(
                    profile.Model,
                    AppPaths.DefaultKimiModel,
                    StringComparison.Ordinal);
-    }
+
+    private static bool IsSuiXiangProfile(ProviderProfile profile) =>
+        !IsKimiProfile(profile) &&
+        (profile.Kind == ProviderKinds.SuiXiang ||
+         IsSuiXiangBaseUrl(profile.BaseUrl));
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
@@ -95,6 +120,7 @@ public partial class MainWindow : Window
             var status = _configService.ReadStatus();
             _settingsLoadResult = _settingsStore.LoadWithStatus(status);
             _settings = _settingsLoadResult.Settings;
+            _selectedProviderProfileId = _settings.ActiveProviderProfileId;
             Localizer.Use(_settings.UiLanguage);
             ThemeManager.Apply(_settings.UiTheme);
             ApplyLanguage();
@@ -103,6 +129,7 @@ public partial class MainWindow : Window
             RefreshSolUltraSetting();
             BaseUrlTextBox.Text = _settings.ThirdPartyBaseUrl;
             ModelComboBox.Text = _settings.ThirdPartyModel;
+            RefreshProviderProfilePicker();
             RestartCheckBox.IsChecked = _settings.RestartAfterSwitch;
             OpenGeneratedImageButton.IsEnabled = HasGeneratedImage();
             UpdatePersistedProviderCapabilityStatuses();
@@ -144,7 +171,6 @@ public partial class MainWindow : Window
 
     private void MainWindow_Closed(object? sender, EventArgs e)
     {
-        _kimiRouterProcessService.Dispose();
         if (!_systemThemeEventsSubscribed)
         {
             return;
@@ -1042,21 +1068,18 @@ public partial class MainWindow : Window
         return profile;
     }
 
-    private ProviderProfile? FindProfileByBaseUrl(string normalizedBaseUrl) =>
-        _settings.ProviderProfiles.FirstOrDefault(candidate =>
+    private ProviderProfile? FindProfileByBaseUrl(string normalizedBaseUrl)
+    {
+        var active = _settings.ActiveProviderProfile;
+        if (active is not null &&
+            ProfileMatchesBaseUrl(active, normalizedBaseUrl))
         {
-            try
-            {
-                return string.Equals(
-                    ConfigService.NormalizeBaseUrl(candidate.BaseUrl),
-                    normalizedBaseUrl,
-                    StringComparison.OrdinalIgnoreCase);
-            }
-            catch (ArgumentException)
-            {
-                return false;
-            }
-        });
+            return active;
+        }
+
+        return _settings.ProviderProfiles.FirstOrDefault(candidate =>
+            ProfileMatchesBaseUrl(candidate, normalizedBaseUrl));
+    }
 
     private string ResolveSavedKeyForExactBaseUrl(string normalizedBaseUrl)
     {
@@ -1214,12 +1237,9 @@ public partial class MainWindow : Window
                 T("需要完成设置", "Setup required")
         };
         UpdateDailyPrimaryAction(status);
+        RefreshProviderProfilePicker();
 
-        KeyStatusText.Text = CredentialVault.Exists(ActiveCredentialTarget)
-            ? T("密钥状态：已安全保存", "Key status: securely saved")
-            : T(
-                "密钥状态：尚未保存（请使用撤销旧密钥后生成的新密钥）",
-                "Key status: not saved (revoke the exposed key and use a newly generated key)");
+        UpdateKeyStatusText();
 
         HistoryStatusText.Text = T(
             "正在核对聊天历史文件…",
@@ -1443,7 +1463,7 @@ public partial class MainWindow : Window
     {
         await RunBusyAsync(async () =>
         {
-            SaveNonSecretSettings();
+            var profile = SaveNonSecretSettings(persist: false);
             var key = ApiKeyPasswordBox.Password.Trim();
             if (key.Length < 16)
             {
@@ -1452,8 +1472,13 @@ public partial class MainWindow : Window
                     "Enter the complete newly generated API key."));
             }
 
-            CredentialVault.Write(ActiveCredentialTarget, key);
+            CredentialVault.Write(
+                CredentialTargetFactory.RequireValid(profile.CredentialTarget),
+                key);
+            _settingsStore.Save(_settings);
             ApiKeyPasswordBox.Clear();
+            RefreshProviderProfilePicker();
+            UpdateKeyStatusText();
             OperationStatusText.Text = T(
                 "新密钥已保存到 Windows 凭据管理器。",
                 "The new key was saved to Windows Credential Manager.");
@@ -1477,8 +1502,19 @@ public partial class MainWindow : Window
 
         await RunBusyAsync(async () =>
         {
-            CredentialVault.Delete(ActiveCredentialTarget);
+            if (_isNewProviderProfileDraft || DraftProviderProfile is null)
+            {
+                throw new InvalidOperationException(T(
+                    "新账号尚未保存密钥。",
+                    "The new account has no saved key."));
+            }
+
+            CredentialVault.Delete(
+                CredentialTargetFactory.RequireValid(
+                    DraftProviderProfile.CredentialTarget));
             ApiKeyPasswordBox.Clear();
+            RefreshProviderProfilePicker();
+            UpdateKeyStatusText();
             OperationStatusText.Text = T(
                 "第三方密钥已删除。",
                 "The third-party key was deleted.");
@@ -1490,12 +1526,12 @@ public partial class MainWindow : Window
     {
         await RunBusyAsync(async () =>
         {
-            SaveNonSecretSettings();
+            var profile = SaveNonSecretSettings(persist: false);
             var key = ResolveAndOptionallySaveKey();
             ConnectionTestResult result;
             try
             {
-                result = await TestConnectionAsync(key);
+                result = await TestConnectionAsync(profile.BaseUrl, profile.Model, key);
             }
             catch
             {
@@ -1510,8 +1546,8 @@ public partial class MainWindow : Window
                 _settings.LastSuccessfulCompatibilityTestUtc = DateTimeOffset.UtcNow;
                 _settings.LastTestedEndpointFingerprint =
                     ConnectionTestService.EndpointFingerprint(
-                        _settings.ThirdPartyBaseUrl,
-                        _settings.ThirdPartyModel);
+                        profile.BaseUrl,
+                        profile.Model);
             }
             else
             {
@@ -1539,7 +1575,7 @@ public partial class MainWindow : Window
     {
         await RunBusyAsync(async () =>
         {
-            SaveNonSecretSettings();
+            var profile = SaveNonSecretSettings(persist: false);
             var key = ResolveAndOptionallySaveKey();
             ToolCapabilityStatusText.Text =
                 T(
@@ -1551,8 +1587,8 @@ public partial class MainWindow : Window
             try
             {
                 result = await _connectionTestService.TestFunctionCallingAsync(
-                    _settings.ThirdPartyBaseUrl,
-                    _settings.ThirdPartyModel,
+                    profile.BaseUrl,
+                    profile.Model,
                     key);
             }
             catch
@@ -1572,7 +1608,9 @@ public partial class MainWindow : Window
             {
                 _settings.LastSuccessfulToolTestUtc = DateTimeOffset.UtcNow;
                 _settings.LastToolTestedEndpointFingerprint =
-                    CurrentToolEndpointFingerprint();
+                    ConnectionTestService.EndpointFingerprint(
+                        profile.BaseUrl,
+                        profile.Model);
             }
             else
             {
@@ -1610,7 +1648,7 @@ public partial class MainWindow : Window
 
         await RunBusyAsync(async () =>
         {
-            SaveNonSecretSettings();
+            var profile = SaveNonSecretSettings(persist: false);
             var key = ResolveAndOptionallySaveKey();
             ImageCapabilityStatusText.Text =
                 T(
@@ -1622,7 +1660,7 @@ public partial class MainWindow : Window
             try
             {
                 result = await _connectionTestService.TestImageGenerationAsync(
-                    _settings.ThirdPartyBaseUrl,
+                    profile.BaseUrl,
                     AppPaths.DefaultThirdPartyImageModel,
                     key);
             }
@@ -1644,7 +1682,9 @@ public partial class MainWindow : Window
             {
                 _settings.LastSuccessfulImageTestUtc = DateTimeOffset.UtcNow;
                 _settings.LastImageTestedEndpointFingerprint =
-                    CurrentImageEndpointFingerprint();
+                    ConnectionTestService.EndpointFingerprint(
+                        profile.BaseUrl,
+                        AppPaths.DefaultThirdPartyImageModel);
                 _settings.LastGeneratedImagePath = result.ArtifactPath;
             }
             else
@@ -1728,10 +1768,10 @@ public partial class MainWindow : Window
         }
 
         OperationStatusText.Text = T(
-            "正在确保本机随想 K3 路由器可用…",
-            "Ensuring the local SuiXiang K3 router is ready...");
-        var router = await _kimiRouterProcessService.EnsureRunningAsync(
-            KimiRouterExecutablePath,
+            "正在确保 WSL 内的随想 K3 路由器可用…",
+            "Ensuring the SuiXiang K3 router inside WSL is ready...");
+        var router = await _wslKimiRouterService.EnsureRunningAsync(
+            KimiWslLauncherPath,
             CancellationToken.None);
         if (!router.Success)
         {
@@ -1739,10 +1779,10 @@ public partial class MainWindow : Window
         }
 
         OperationStatusText.Text = T(
-            "正在实时测试随想 K3 loopback Responses…",
-            "Running a live SuiXiang K3 loopback Responses test...");
-        var compatibility = await _connectionTestService.TestResponsesApiAsync(
-            AppPaths.KimiRouterBaseUrl,
+            "正在实时测试随想 K3 上游 Chat Completions…",
+            "Running a live SuiXiang K3 upstream Chat Completions test...");
+        var compatibility = await _connectionTestService.TestChatCompletionsApiAsync(
+            AppPaths.KimiUpstreamBaseUrl,
             model,
             apiKey,
             CancellationToken.None);
@@ -1797,18 +1837,18 @@ public partial class MainWindow : Window
         result.StatusCode switch
         {
             401 or 403 => T(
-                "随想 K3 loopback 测试被拒绝（API Key 或权限无效）。未切换线路。",
-                "The SuiXiang K3 loopback test was rejected (invalid API key or permission). The route was not switched."),
+                "随想 K3 上游测试被拒绝（API Key 或权限无效）。未切换线路。",
+                "The SuiXiang K3 upstream test was rejected (invalid API key or permission). The route was not switched."),
             404 => T(
-                "随想 K3 loopback 返回 HTTP 404：模型可能不受支持。未切换线路。",
-                "The SuiXiang K3 loopback returned HTTP 404: the model may be unsupported. The route was not switched."),
+                "随想 K3 上游返回 HTTP 404：模型可能不受支持。未切换线路。",
+                "The SuiXiang K3 upstream returned HTTP 404: the model may be unsupported. The route was not switched."),
             502 or 503 => F(
-                "随想 K3 loopback 返回上游暂时不可用（HTTP {0}）。未切换线路，请稍后重试。",
-                "The SuiXiang K3 loopback upstream is temporarily unavailable (HTTP {0}). The route was not switched; retry later.",
+                "随想 K3 上游暂时不可用（HTTP {0}）。未切换线路，请稍后重试。",
+                "The SuiXiang K3 upstream is temporarily unavailable (HTTP {0}). The route was not switched; retry later.",
                 result.StatusCode),
             _ => F(
-                "随想 K3 loopback Responses 测试未通过：{0}。未切换线路。",
-                "The SuiXiang K3 loopback Responses test failed: {0}. The route was not switched.",
+                "随想 K3 上游 Chat Completions 测试未通过：{0}。未切换线路。",
+                "The SuiXiang K3 upstream Chat Completions test failed: {0}. The route was not switched.",
                 result.Summary)
         };
 
@@ -1817,8 +1857,8 @@ public partial class MainWindow : Window
         await RunBusyAsync(async () =>
         {
             var previousActiveProfileId = _settings.ActiveProviderProfileId;
-            var previousThirdPartyBaseUrl = _settings.ThirdPartyBaseUrl;
-            var previousThirdPartyModel = _settings.ThirdPartyModel;
+            var previousSelectedProfileId = _selectedProviderProfileId;
+            var previousNewProfileDraft = _isNewProviderProfileDraft;
             var previousRestartAfterSwitch = _settings.RestartAfterSwitch;
             var previousStoredOfficialModel = _settings.OfficialModel;
             var previousStoredOfficialReviewModel =
@@ -1827,23 +1867,21 @@ public partial class MainWindow : Window
                 _settings.LastSuccessfulCompatibilityTestUtc;
             var previousCompatibilityFingerprint =
                 _settings.LastTestedEndpointFingerprint;
-            var displayedBaseUrl = ConfigService.NormalizeBaseUrl(BaseUrlTextBox.Text);
-            var previousDisplayedProfile = FindProfileByBaseUrl(displayedBaseUrl);
-            var previousDisplayedProfileSnapshot = previousDisplayedProfile is null
+            var selectedProfileBeforeSave = DraftProviderProfile;
+            var previousDisplayedProfileSnapshot = selectedProfileBeforeSave is null
                 ? null
-                : CloneProviderProfile(previousDisplayedProfile);
-            var previousDisplayedKey = previousDisplayedProfile is null ||
+                : CloneProviderProfile(selectedProfileBeforeSave);
+            var previousDisplayedKey = selectedProfileBeforeSave is null ||
                                   !CredentialTargetFactory.IsValid(
-                                      previousDisplayedProfile.CredentialTarget)
+                                      selectedProfileBeforeSave.CredentialTarget)
                 ? null
-                : CredentialVault.Read(previousDisplayedProfile.CredentialTarget);
+                : CredentialVault.Read(selectedProfileBeforeSave.CredentialTarget);
             ProviderProfile? attemptedProfile = null;
             string? selectedCredentialTarget = null;
             var credentialMayHaveChanged = false;
 
             void RestoreAttemptedProviderState()
             {
-                attemptedProfile ??= FindProfileByBaseUrl(displayedBaseUrl);
                 if (attemptedProfile is not null)
                 {
                     RestoreProviderProfile(
@@ -1859,8 +1897,6 @@ public partial class MainWindow : Window
                     _settings.ActiveProviderProfileId = previousActiveProfileId;
                 }
 
-                _settings.ThirdPartyBaseUrl = previousThirdPartyBaseUrl;
-                _settings.ThirdPartyModel = previousThirdPartyModel;
                 _settings.RestartAfterSwitch = previousRestartAfterSwitch;
                 _settings.OfficialModel = previousStoredOfficialModel;
                 _settings.OfficialReviewModel =
@@ -1879,18 +1915,23 @@ public partial class MainWindow : Window
                 }
 
                 _settingsStore.Save(_settings);
-                BaseUrlTextBox.Text = _settings.ThirdPartyBaseUrl;
-                ModelComboBox.Text = _settings.ThirdPartyModel;
+                _selectedProviderProfileId = previousSelectedProfileId;
+                _isNewProviderProfileDraft = previousNewProfileDraft;
+                var restoredProfile = DraftProviderProfile ?? ActiveProviderProfile;
+                BaseUrlTextBox.Text = restoredProfile.BaseUrl;
+                ModelComboBox.Text = restoredProfile.Model;
                 ApiKeyPasswordBox.Clear();
+                RefreshProviderProfilePicker();
+                UpdateKeyStatusText();
                 UpdatePersistedProviderCapabilityStatuses();
             }
 
             string key;
             try
             {
-                SaveNonSecretSettings();
-                attemptedProfile = ActiveProviderProfile;
-                selectedCredentialTarget = ActiveCredentialTarget;
+                attemptedProfile = SaveNonSecretSettings(persist: false);
+                selectedCredentialTarget = CredentialTargetFactory.RequireValid(
+                    attemptedProfile.CredentialTarget);
                 credentialMayHaveChanged = true;
                 key = ResolveAndOptionallySaveKey();
             }
@@ -1899,7 +1940,7 @@ public partial class MainWindow : Window
                 RestoreAttemptedProviderState();
                 throw;
             }
-            if (IsKimiProviderProfile())
+            if (IsKimiProfile(attemptedProfile))
             {
                 var currentKimi = _configService.ReadStatus();
                 var previousOfficialModel = _settings.OfficialModel;
@@ -1918,9 +1959,9 @@ public partial class MainWindow : Window
                 try
                 {
                     kimiSwitch = await EnsureAndSwitchToKimiAsync(
-                        _settings.ThirdPartyModel,
+                        attemptedProfile.Model,
                         key,
-                        ActiveCredentialTarget);
+                        selectedCredentialTarget!);
                 }
                 catch
                 {
@@ -1930,10 +1971,13 @@ public partial class MainWindow : Window
                     throw;
                 }
                 _settings.RestartAfterSwitch = RestartCheckBox.IsChecked == true;
+                _settings.ActiveProviderProfileId = attemptedProfile.Id;
+                _selectedProviderProfileId = attemptedProfile.Id;
+                _isNewProviderProfileDraft = false;
                 _settings.LastTestedEndpointFingerprint =
                     ConnectionTestService.EndpointFingerprint(
                         AppPaths.KimiRouterBaseUrl,
-                        _settings.ThirdPartyModel);
+                        attemptedProfile.Model);
                 _settings.LastSuccessfulCompatibilityTestUtc = DateTimeOffset.UtcNow;
                 _settingsStore.Save(_settings);
                 RefreshLunaWorkerAgentStatus(kimiSwitch.VerifiedStatus);
@@ -1953,11 +1997,11 @@ public partial class MainWindow : Window
                 // the generic RestartAfterSwitch preference is intentionally ignored.
                 return;
             }
-            var suiXiangRoute = IsSuiXiangProviderProfile();
+            var suiXiangRoute = IsSuiXiangProfile(attemptedProfile);
 
             var fingerprint = ConnectionTestService.EndpointFingerprint(
-                _settings.ThirdPartyBaseUrl,
-                _settings.ThirdPartyModel);
+                attemptedProfile.BaseUrl,
+                attemptedProfile.Model);
             var recentlyTested =
                 !suiXiangRoute &&
                 _settings.LastTestedEndpointFingerprint == fingerprint &&
@@ -1973,7 +2017,10 @@ public partial class MainWindow : Window
                 ConnectionTestResult result;
                 try
                 {
-                    result = await TestConnectionAsync(key);
+                    result = await TestConnectionAsync(
+                        attemptedProfile.BaseUrl,
+                        attemptedProfile.Model,
+                        key);
                 }
                 catch
                 {
@@ -2047,11 +2094,11 @@ public partial class MainWindow : Window
             try
             {
                 switchResult = await SwitchToThirdPartyFromCurrentConfigAsync(
-                    new ThirdPartySwitchRequest(
-                        _settings.ThirdPartyModel,
-                        _settings.ThirdPartyBaseUrl,
+                        new ThirdPartySwitchRequest(
+                        attemptedProfile.Model,
+                        attemptedProfile.BaseUrl,
                         TokenBrokerPath,
-                        selectedCredentialTarget),
+                        selectedCredentialTarget!),
                     current);
             }
             catch
@@ -2060,6 +2107,16 @@ public partial class MainWindow : Window
                 throw;
             }
             RefreshLunaWorkerAgentStatus(switchResult.VerifiedStatus);
+
+            // The draft only becomes the active account after config.toml was
+            // written and verified.  A failed request above leaves the
+            // previous active profile untouched.
+            _settings.ActiveProviderProfileId = attemptedProfile.Id;
+            _selectedProviderProfileId = attemptedProfile.Id;
+            _isNewProviderProfileDraft = false;
+            _settingsStore.Save(_settings);
+            RefreshProviderProfilePicker();
+            UpdateKeyStatusText();
 
             var kimiRestartWarning = _kimiRestartWarning;
             OperationStatusText.Text =
@@ -2083,14 +2140,6 @@ public partial class MainWindow : Window
                 await RestartIfRequestedAsync();
             }
         });
-    }
-
-    private bool IsSuiXiangProviderProfile()
-    {
-        var profile = ActiveProviderProfile;
-        return !IsKimiProviderProfile() &&
-               (profile.Kind == ProviderKinds.SuiXiang ||
-                IsSuiXiangBaseUrl(_settings.ThirdPartyBaseUrl));
     }
 
     private static string DescribeSuiXiangCompatibilityFailure(
@@ -2342,7 +2391,7 @@ public partial class MainWindow : Window
         });
     }
 
-    private void SaveNonSecretSettings()
+    private ProviderProfile SaveNonSecretSettings(bool persist = true)
     {
         var normalizedBaseUrl = ConfigService.NormalizeBaseUrl(BaseUrlTextBox.Text);
         var model = ModelComboBox.Text.Trim();
@@ -2378,22 +2427,28 @@ public partial class MainWindow : Window
             profile.DisplayName = uri.Host;
         }
 
-        _settings.ThirdPartyBaseUrl = normalizedBaseUrl;
-        _settings.ThirdPartyModel = model;
         _settings.RestartAfterSwitch = RestartCheckBox.IsChecked == true;
-        _settingsStore.Save(_settings);
+        if (persist)
+        {
+            _settingsStore.Save(_settings);
+        }
+
+        _selectedProviderProfileId = profile.Id;
+        _isNewProviderProfileDraft = false;
         UpdatePersistedProviderCapabilityStatuses();
+        return profile;
     }
 
     private ProviderProfile SelectOrCreateProfileForProviderFields(
         string normalizedBaseUrl,
         string model)
     {
-        var profile = _settings.ProviderProfiles.FirstOrDefault(candidate =>
-            string.Equals(
-                candidate.BaseUrl,
-                normalizedBaseUrl,
-                StringComparison.OrdinalIgnoreCase));
+        // A draft selection owns its own credential slot.  Never collapse it
+        // into another profile merely because both use the same SuiXiang URL.
+        // This is what makes multiple accounts/keys for one provider reliable.
+        var profile = _isNewProviderProfileDraft
+            ? null
+            : DraftProviderProfile;
         if (profile is null)
         {
             var enteredKey = ApiKeyPasswordBox.Password.Trim();
@@ -2435,8 +2490,224 @@ public partial class MainWindow : Window
             }
         }
 
-        _settings.ActiveProviderProfileId = profile.Id;
+        _selectedProviderProfileId = profile.Id;
+        _isNewProviderProfileDraft = false;
         return profile;
+    }
+
+    private void UpdateKeyStatusText()
+    {
+        if (_isNewProviderProfileDraft)
+        {
+            KeyStatusText.Text = T(
+                "密钥状态：新账号尚未保存",
+                "Key status: new account not saved yet");
+            return;
+        }
+
+        var profile = DraftProviderProfile ?? ActiveProviderProfile;
+        KeyStatusText.Text = CredentialTargetFactory.IsValid(profile.CredentialTarget) &&
+                             CredentialVault.Exists(profile.CredentialTarget)
+            ? T("密钥状态：已安全保存", "Key status: securely saved")
+            : T(
+                "密钥状态：尚未保存（请使用撤销旧密钥后生成的新密钥）",
+                "Key status: not saved (revoke the exposed key and use a newly generated key)");
+    }
+
+    private static bool ProfileMatchesBaseUrl(
+        ProviderProfile profile,
+        string normalizedBaseUrl)
+    {
+        try
+        {
+            return string.Equals(
+                ConfigService.NormalizeBaseUrl(profile.BaseUrl),
+                normalizedBaseUrl,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private void RefreshProviderProfilePicker()
+    {
+        if (ProviderProfileComboBox is null)
+        {
+            return;
+        }
+
+        var profiles = _settings.ProviderProfiles.ToList();
+        _isRefreshingProviderProfiles = true;
+        try
+        {
+            ProviderProfileComboBox.Items.Clear();
+            ComboBoxItem? selected = null;
+            foreach (var profile in profiles)
+            {
+                var item = new ComboBoxItem
+                {
+                    Content = CreateProviderProfilePickerContent(profile),
+                    Tag = profile.Id
+                };
+                ProviderProfileComboBox.Items.Add(item);
+                if (!_isNewProviderProfileDraft &&
+                    string.Equals(
+                        profile.Id,
+                        _selectedProviderProfileId ?? _settings.ActiveProviderProfileId,
+                        StringComparison.Ordinal))
+                {
+                    selected = item;
+                }
+            }
+
+            ProviderProfileComboBox.SelectedItem = selected;
+        }
+        finally
+        {
+            _isRefreshingProviderProfiles = false;
+        }
+    }
+
+    private StackPanel CreateProviderProfilePickerContent(ProviderProfile profile)
+    {
+        var routeName = ResolveProfileRouteName(profile);
+        var model = string.IsNullOrWhiteSpace(profile.Model)
+            ? T("未设置模型", "No model")
+            : profile.Model.Trim();
+        var keyState = CredentialTargetFactory.IsValid(profile.CredentialTarget) &&
+                       CredentialVault.Exists(profile.CredentialTarget)
+            ? T("密钥已保存", "key saved")
+            : T("需要密钥", "key needed");
+        var endpoint = Uri.TryCreate(profile.BaseUrl, UriKind.Absolute, out var uri)
+            ? uri.Host
+            : profile.BaseUrl;
+
+        var panel = new StackPanel { Margin = new Thickness(0, 1, 0, 1) };
+        panel.Children.Add(new TextBlock
+        {
+            Text = routeName,
+            FontWeight = FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"{model} · {keyState} · {endpoint}",
+            FontSize = 11,
+            Foreground = ResourceBrush("SubtleTextBrush"),
+            TextTrimming = TextTrimming.CharacterEllipsis
+        });
+        return panel;
+    }
+
+    private string ResolveProfileRouteName(ProviderProfile profile)
+    {
+        if (profile.Kind == ProviderKinds.Kimi)
+        {
+            return T("随想 K3（实验）", "SuiXiang K3 (experimental)");
+        }
+
+        if (profile.Kind == ProviderKinds.SuiXiang)
+        {
+            return T("随想 OpenAI", "SuiXiang OpenAI");
+        }
+
+        if (!string.IsNullOrWhiteSpace(profile.DisplayName))
+        {
+            return profile.DisplayName;
+        }
+
+        return Uri.TryCreate(profile.BaseUrl, UriKind.Absolute, out var uri)
+            ? uri.Host
+            : profile.BaseUrl;
+    }
+
+    private static string NormalizeProfileBaseUrl(ProviderProfile profile)
+    {
+        try
+        {
+            return ConfigService.NormalizeBaseUrl(profile.BaseUrl);
+        }
+        catch (ArgumentException)
+        {
+            return profile.BaseUrl.Trim();
+        }
+    }
+
+    private void ProviderProfileComboBox_SelectionChanged(
+        object sender,
+        SelectionChangedEventArgs e)
+    {
+        if (!_isInitialized ||
+            _isBusy ||
+            _isRefreshingProviderProfiles ||
+            ProviderProfileComboBox.SelectedItem is not ComboBoxItem item ||
+            item.Tag is not string profileId)
+        {
+            return;
+        }
+
+        var profile = _settings.ProviderProfiles.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, profileId, StringComparison.Ordinal));
+        if (profile is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _selectedProviderProfileId = profile.Id;
+            _isNewProviderProfileDraft = false;
+            BaseUrlTextBox.Text = profile.BaseUrl;
+            ModelComboBox.Text = profile.Model;
+            ApiKeyPasswordBox.Clear();
+            UpdateKeyStatusText();
+            UpdatePersistedProviderCapabilityStatuses();
+            OperationStatusText.Text = F(
+                "已载入 {0}。这只是待切换草稿；点击“切换到第三方”成功后才会成为当前线路。",
+                "Loaded {0}. This is only a switch draft; it becomes the active route after Switch to third-party succeeds.",
+                ResolveProfileRouteName(profile));
+        }
+        catch (Exception exception)
+        {
+            _selectedProviderProfileId = _settings.ActiveProviderProfileId;
+            _isNewProviderProfileDraft = false;
+            RefreshProviderProfilePicker();
+            ShowFailure(T("选择线路失败", "Could not select route"), exception);
+        }
+    }
+
+    private async void NewProviderProfileButton_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        await RunBusyAsync(() =>
+        {
+            var baseUrl = ConfigService.NormalizeBaseUrl(BaseUrlTextBox.Text);
+            var model = ModelComboBox.Text.Trim();
+            if (string.IsNullOrWhiteSpace(model))
+            {
+                model = AppPaths.DefaultThirdPartyModel;
+            }
+
+            // Do not create an empty profile.  The new account is only added
+            // after a valid key is saved or a successful switch writes it.
+            // In particular, preserve a selected K3 model instead of silently
+            // turning it into the default direct OpenAI model.
+            _selectedProviderProfileId = null;
+            _isNewProviderProfileDraft = true;
+            BaseUrlTextBox.Text = baseUrl;
+            ModelComboBox.Text = model;
+            ApiKeyPasswordBox.Clear();
+            RefreshProviderProfilePicker();
+            UpdateKeyStatusText();
+            UpdatePersistedProviderCapabilityStatuses();
+            OperationStatusText.Text = T(
+                "请输入新账号的 API Key；保存密钥或成功切换后，才会建立独立账号。",
+                "Enter the new account API key. A separate account is created only after you save the key or switch successfully.");
+            return Task.CompletedTask;
+        });
     }
 
     private void ProviderSettingsTextBox_TextChanged(
@@ -2446,6 +2717,7 @@ public partial class MainWindow : Window
         if (_isInitialized)
         {
             UpdatePersistedProviderCapabilityStatuses();
+            UpdateKimiUi();
         }
     }
 
@@ -2456,6 +2728,7 @@ public partial class MainWindow : Window
         if (_isInitialized)
         {
             UpdatePersistedProviderCapabilityStatuses();
+            UpdateKimiUi();
         }
     }
 
@@ -2466,6 +2739,7 @@ public partial class MainWindow : Window
         if (_isInitialized)
         {
             UpdatePersistedProviderCapabilityStatuses();
+            UpdateKimiUi();
         }
     }
 
@@ -2499,24 +2773,7 @@ public partial class MainWindow : Window
                 .Select(model => model.Trim())
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            var kimiDiscovery = SettingsStore.IsKimiBaseUrl(normalizedBaseUrl) &&
-                                string.Equals(
-                                    currentModel,
-                                    AppPaths.DefaultKimiModel,
-                                    StringComparison.Ordinal);
-            if (kimiDiscovery)
-            {
-                models = models
-                    .Where(model => string.Equals(
-                        model,
-                        AppPaths.DefaultKimiModel,
-                        StringComparison.Ordinal))
-                    .ToList();
-                if (!models.Contains(AppPaths.DefaultKimiModel, StringComparer.Ordinal))
-                {
-                    models.Insert(0, AppPaths.DefaultKimiModel);
-                }
-            }
+            var suiXiangDiscovery = SettingsStore.IsKimiBaseUrl(normalizedBaseUrl);
             ModelComboBox.Items.Clear();
             foreach (var model in models)
             {
@@ -2531,15 +2788,11 @@ public partial class MainWindow : Window
                                        model,
                                        currentModel,
                                        StringComparison.OrdinalIgnoreCase));
-            ModelDiscoveryStatusText.Text = kimiDiscovery
-                ? currentIsListed
-                    ? T(
-                        "随想 K3 实验线路当前仅支持 k3；自定义模型 ID 已禁用。",
-                        "The SuiXiang K3 experimental route supports only k3; custom model IDs are disabled.")
-                    : F(
-                        "随想 K3 实验线路当前仅支持 k3；已保留当前模型“{0}”，连接时会拒绝其他模型。",
-                        "The SuiXiang K3 experimental route currently supports only k3; kept the current model \"{0}\", but connecting with another model is rejected.",
-                        currentModel)
+            ModelDiscoveryStatusText.Text = suiXiangDiscovery
+                ? F(
+                    "已发现 {0} 个随想模型；选择 k3 使用实验适配器，其他模型直接走随想 Responses。",
+                    "Discovered {0} SuiXiang models; choose k3 for the experimental adapter, or use direct SuiXiang Responses for other models.",
+                    models.Count)
                 : currentIsListed || currentModel.Length == 0
                 ? F(
                     "已发现 {0} 个模型；仍可手动输入自定义模型 ID。",
@@ -2558,20 +2811,12 @@ public partial class MainWindow : Window
     {
         // Resolve the profile by the URL first. Never fall back to the active
         // profile's credential when the URL points at another service.
-        var profile = _settings.ProviderProfiles.FirstOrDefault(candidate =>
-        {
-            try
-            {
-                return string.Equals(
-                    ConfigService.NormalizeBaseUrl(candidate.BaseUrl),
-                    normalizedBaseUrl,
-                    StringComparison.OrdinalIgnoreCase);
-            }
-            catch (ArgumentException)
-            {
-                return false;
-            }
-        });
+        var selected = DraftProviderProfile;
+        var profile = selected is not null &&
+                      ProfileMatchesBaseUrl(selected, normalizedBaseUrl)
+            ? selected
+            : _settings.ProviderProfiles.FirstOrDefault(candidate =>
+                ProfileMatchesBaseUrl(candidate, normalizedBaseUrl));
 
         var entered = ApiKeyPasswordBox.Password.Trim();
         if (!string.IsNullOrWhiteSpace(entered))
@@ -2612,22 +2857,44 @@ public partial class MainWindow : Window
                     "Enter the complete newly generated API key."));
             }
 
-            CredentialVault.Write(ActiveCredentialTarget, entered);
+            if (_isNewProviderProfileDraft || DraftProviderProfile is null)
+            {
+                throw new InvalidOperationException(T(
+                    "请先保存账号设置，再保存密钥。",
+                    "Save the account settings before saving its key."));
+            }
+
+            CredentialVault.Write(
+                CredentialTargetFactory.RequireValid(
+                    DraftProviderProfile.CredentialTarget),
+                entered);
             ApiKeyPasswordBox.Clear();
             return entered;
         }
 
-        return CredentialVault.Read(ActiveCredentialTarget)
+        if (_isNewProviderProfileDraft || DraftProviderProfile is null)
+        {
+            throw new InvalidOperationException(T(
+                "新账号尚无已保存密钥。请粘贴 API Key。",
+                "The new account has no saved key. Paste its API key."));
+        }
+
+        return CredentialVault.Read(
+                   CredentialTargetFactory.RequireValid(
+                       DraftProviderProfile.CredentialTarget))
             ?? throw new InvalidOperationException(
                 T(
                     "尚未保存第三方密钥。请先撤销已暴露的旧密钥，再粘贴新密钥。",
                     "No third-party key is saved. Revoke the exposed old key, then paste a newly generated key."));
     }
 
-    private Task<ConnectionTestResult> TestConnectionAsync(string key) =>
+    private Task<ConnectionTestResult> TestConnectionAsync(
+        string baseUrl,
+        string model,
+        string key) =>
         _connectionTestService.TestResponsesApiAsync(
-            _settings.ThirdPartyBaseUrl,
-            _settings.ThirdPartyModel,
+            baseUrl,
+            model,
             key);
 
     private static void ValidateKimiModel(string model)
@@ -2797,17 +3064,33 @@ public partial class MainWindow : Window
 
     private void UpdateKimiUi()
     {
-        var kimi = IsKimiProviderProfile();
+        var kimi = IsKimiModelSelection();
         KimiExperimentalNoticeText.Visibility = kimi
             ? Visibility.Visible
             : Visibility.Collapsed;
-        ModelComboBox.IsEditable = !kimi;
+        // Keep this editable while a K3 profile is active so the user can
+        // choose a normal SuiXiang/OpenAI model and leave the experimental
+        // bridge without first switching through official Codex.
+        ModelComboBox.IsEditable = true;
         KimiExperimentalNoticeText.Text = T(
             "随想 K3 实验线路仅支持 k3：随想 API Key 只按此 Base URL 的凭据槽使用；本机路由器健康检查、模型目录和 loopback Responses 测试必须全部通过。当前不承诺图片、Remote 或 Codex 原生插件能力。",
             "The SuiXiang K3 experimental route supports only k3: the SuiXiang API key is used only from this Base URL's credential slot; router health, the model catalog, and a loopback Responses test must all pass. Images, Remote, and native Codex plugin capabilities are not promised.");
         SwitchThirdPartyButton.Content = kimi
             ? T("切换到随想 K3", "Switch to SuiXiang K3")
             : T("切换到第三方", "Switch to third-party");
+    }
+
+    private bool IsKimiModelSelection()
+    {
+        if (!SettingsStore.IsKimiBaseUrl(BaseUrlTextBox.Text))
+        {
+            return false;
+        }
+
+        return string.Equals(
+            ModelComboBox.Text.Trim(),
+            AppPaths.DefaultKimiModel,
+            StringComparison.Ordinal);
     }
 
     private void ClearCurrentToolTestResult()
@@ -2937,6 +3220,8 @@ public partial class MainWindow : Window
         SystemThemeButton.IsEnabled = !busy;
         BaseUrlTextBox.IsEnabled = !busy;
         ModelComboBox.IsEnabled = !busy;
+        ProviderProfileComboBox.IsEnabled = !busy;
+        NewProviderProfileButton.IsEnabled = !busy;
         RefreshModelsButton.IsEnabled = !busy;
         ApiKeyPasswordBox.IsEnabled = !busy;
         RestartCheckBox.IsEnabled = !busy;
@@ -3031,6 +3316,14 @@ public partial class MainWindow : Window
             "选择线路并管理第三方 Responses API。切换不会改变聊天历史分区。",
             "Choose a route and manage the third-party Responses API. Switching never changes the chat-history partition.");
         ThirdPartyTitleText.Text = T("第三方线路", "Third-party route");
+        SavedProfileLabelText.Text = T("已保存账号", "Saved accounts");
+        SavedProfileDescriptionText.Text = T(
+            "选择只会载入草稿；点击切换成功后才会成为当前线路。",
+            "Selection only loads a draft. It becomes the active route after a successful switch.");
+        NewProviderProfileButton.Content = T("添加账号", "Add account");
+        NewProviderProfileButton.ToolTip = T(
+            "添加一个独立的 API Key；输入并保存密钥或成功切换后才会建立账号。",
+            "Add an independent API key. The account is created only after the key is saved or a switch succeeds.");
         KimiExperimentalNoticeText.Text = T(
             "随想 K3 实验线路仅支持 k3：随想 API Key 只按此 Base URL 的凭据槽使用；本机路由器健康检查、模型目录和 loopback Responses 测试必须全部通过。当前不承诺图片、Remote 或 Codex 原生插件能力。",
             "The SuiXiang K3 experimental route supports only k3: the SuiXiang API key is used only from this Base URL's credential slot; router health, the model catalog, and a loopback Responses test must all pass. Images, Remote, and native Codex plugin capabilities are not promised.");
@@ -3162,6 +3455,7 @@ public partial class MainWindow : Window
         SystemThemeButton.ToolTip = T("跟随 Windows 外观", "Follow Windows appearance");
         UpdateSolUltraStatus();
         UpdateLunaWorkerAgentStatus();
+        RefreshProviderProfilePicker();
         UpdateKimiUi();
         UpdateUpdateCheckUi();
         UpdateLanguageButtons();

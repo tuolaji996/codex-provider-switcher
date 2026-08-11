@@ -4,11 +4,20 @@
     <TargetFramework>net8.0</TargetFramework>
     <AssemblyName>CodexProviderKimiRouter</AssemblyName>
     <RootNamespace>CodexProviderKimiRouter</RootNamespace>
-    <Version>1.4.0</Version>
+    <Version>1.4.1</Version>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
+    <!-- The WSL adapter must start on lean distributions that do not ship
+         libicu. The router uses only invariant protocol formatting. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="CodexProviderKimiRouter.ProtocolTests" />
   </ItemGroup>
+
+  <Target Name="VerifyInvariantGlobalizationForPublish" BeforeTargets="Publish">
+    <Error
+      Condition="'$(InvariantGlobalization)' != 'true'"
+      Text="CodexProviderKimiRouter must publish with InvariantGlobalization=true so the WSL router can start without libicu." />
+  </Target>
 </Project>

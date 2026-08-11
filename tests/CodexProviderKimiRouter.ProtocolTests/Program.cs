@@ -463,6 +463,128 @@ async Task VerifyRouterScenarioAsync(
     }
 }
 
+async Task VerifyStreamingFirstByteAsync()
+{
+    const string scenarioName = "stream first byte before upstream headers";
+    var portListener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+    portListener.Start();
+    var port = ((System.Net.IPEndPoint)portListener.LocalEndpoint).Port;
+    portListener.Stop();
+
+    var upstream = new DelayedUpstreamHandler();
+    var options = new KimiRouterOptions(
+        new Uri("https://example.invalid/v1"),
+        listenPort: port);
+    await using var server = new KimiRouterServer(options, upstream);
+    using var stop = new CancellationTokenSource();
+    var serverTask = server.RunAsync(stop.Token);
+    try
+    {
+        using var healthClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        var healthReady = false;
+        for (var attempt = 0; attempt < 30 && !healthReady; attempt++)
+        {
+            try
+            {
+                using var health = await healthClient.GetAsync(
+                    $"http://127.0.0.1:{port}/health");
+                healthReady = health.StatusCode == HttpStatusCode.OK;
+            }
+            catch (HttpRequestException)
+            {
+                await Task.Delay(25);
+            }
+        }
+
+        Check(healthReady, $"{scenarioName}: loopback router did not become ready.");
+        using var client = new System.Net.Sockets.TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port);
+        await using var stream = client.GetStream();
+        const string requestBody = "{\"model\":\"k3\",\"input\":\"hello\",\"stream\":true}";
+        var request =
+            $"POST /v1/responses HTTP/1.1\r\n" +
+            $"Host: 127.0.0.1:{port}\r\n" +
+            "Authorization: Bearer server-test-secret\r\n" +
+            "Content-Type: application/json\r\n" +
+            $"Content-Length: {System.Text.Encoding.UTF8.GetByteCount(requestBody)}\r\n" +
+            "Connection: close\r\n\r\n" +
+            requestBody;
+        await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(request));
+        await upstream.RequestObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var initialBytes = await ReadUntilAsync(
+            stream,
+            "response.in_progress",
+            TimeSpan.FromSeconds(2));
+        Check(
+            initialBytes.Contains("HTTP/1.1 200 OK", StringComparison.Ordinal),
+            $"{scenarioName}: local SSE headers were not sent before upstream headers.");
+        Check(
+            initialBytes.Contains("response.created", StringComparison.Ordinal) &&
+            initialBytes.Contains("response.in_progress", StringComparison.Ordinal),
+            $"{scenarioName}: initial Responses events were not sent before upstream headers.");
+
+        upstream.Release(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                "data: {\"id\":\"chat-first-byte\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: [DONE]\n\n",
+                System.Text.Encoding.UTF8,
+                "text/event-stream")
+        });
+        var remainder = await ReadUntilAsync(
+            stream,
+            "response.completed",
+            TimeSpan.FromSeconds(2));
+        Check(
+            remainder.Contains("response.completed", StringComparison.Ordinal),
+            $"{scenarioName}: the delayed upstream response did not complete.");
+    }
+    catch (Exception exception)
+    {
+        Check(false, $"{scenarioName}: server test threw {exception.GetType().Name}: {exception.Message}");
+    }
+    finally
+    {
+        upstream.Release(new HttpResponseMessage(HttpStatusCode.BadGateway));
+        stop.Cancel();
+        try
+        {
+            await serverTask.WaitAsync(TimeSpan.FromSeconds(3));
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (TimeoutException)
+        {
+            Check(false, $"{scenarioName}: router did not stop after cancellation.");
+        }
+    }
+}
+
+static async Task<string> ReadUntilAsync(
+    System.Net.Sockets.NetworkStream stream,
+    string expected,
+    TimeSpan timeout)
+{
+    using var cancellation = new CancellationTokenSource(timeout);
+    var buffer = new byte[1024];
+    var received = new System.Text.StringBuilder();
+    while (!received.ToString().Contains(expected, StringComparison.Ordinal))
+    {
+        var count = await stream.ReadAsync(buffer, cancellation.Token);
+        if (count == 0)
+        {
+            break;
+        }
+
+        received.Append(System.Text.Encoding.UTF8.GetString(buffer, 0, count));
+    }
+
+    return received.ToString();
+}
+
+await VerifyStreamingFirstByteAsync();
+
 await VerifyRouterScenarioAsync(
     "non-stream success",
     () => new HttpResponseMessage(HttpStatusCode.OK)
@@ -504,6 +626,21 @@ await VerifyRouterScenarioAsync(
     stream: false,
     HttpStatusCode.TooManyRequests,
     body => body.Contains("rate limited", StringComparison.Ordinal) &&
+            !body.Contains("server-test-secret", StringComparison.Ordinal));
+
+await VerifyRouterScenarioAsync(
+    "stream upstream error",
+    () => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+    {
+        Content = new StringContent(
+            "{\"error\":{\"message\":\"temporary unavailable\"}}",
+            System.Text.Encoding.UTF8,
+            "application/json")
+    },
+    stream: true,
+    HttpStatusCode.OK,
+    body => body.Contains("event: response.failed", StringComparison.Ordinal) &&
+            body.Contains("upstream_http_error", StringComparison.Ordinal) &&
             !body.Contains("server-test-secret", StringComparison.Ordinal));
 
 await VerifyRouterScenarioAsync(
@@ -569,5 +706,30 @@ sealed class FakeUpstreamHandler : HttpMessageHandler
         LastAuthorization = request.Headers.Authorization?.ToString();
         LastRequestBody = request.Content?.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult();
         return Task.FromResult(_factory());
+    }
+}
+
+sealed class DelayedUpstreamHandler : HttpMessageHandler
+{
+    private readonly TaskCompletionSource<HttpResponseMessage> _response = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public TaskCompletionSource<bool> RequestObserved { get; } = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public void Release(HttpResponseMessage response)
+    {
+        if (!_response.TrySetResult(response))
+        {
+            response.Dispose();
+        }
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        RequestObserved.TrySetResult(true);
+        return _response.Task.WaitAsync(cancellationToken);
     }
 }

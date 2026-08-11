@@ -2,7 +2,44 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased]
+## [1.4.1] - 2026-08-11
+
+### Added
+
+- K3 releases now include a self-contained Linux x64 router and a minimal WSL
+  launcher. Codex connects to the router inside its own WSL loopback namespace;
+  the Windows router remains packaged only for compatibility and diagnostics.
+- Saved SuiXiang accounts can keep independent Windows Credential Manager keys
+  and be selected from the Providers page without copying a secret again.
+
+### Fixed
+
+- Fixed repeated K3 reconnects caused by sending WSL Codex traffic to a router
+  that listened only on Windows `127.0.0.1`.
+- K3 authentication now checks and starts the WSL-local router through a
+  detached launcher. A positive authentication refresh interval allows Codex
+  to recover the local router after an unexpected stop.
+- Existing v1.4.0 K3 auth commands that still contain
+  `--ensure-kimi-router` are migrated in place at runtime to the WSL launcher,
+  so an upgrade does not require the user to switch away and back first.
+- Streaming K3 requests establish the local SSE response before waiting for a
+  slow upstream first byte and keep the connection alive while the upstream is
+  still working. Post-header failures are returned as Responses failure events
+  instead of an unexplained socket disconnect.
+- The Providers page no longer locks an active SuiXiang K3 profile to `k3`.
+  Users can select another discovered SuiXiang model and switch back to the
+  direct SuiXiang Responses route.
+- Reworked the saved-account picker so selecting or cancelling a draft does
+  not silently change the active route, create an empty profile, or rename
+  accounts according to unstable list order.
+
+### Safety
+
+- The WSL launcher binds only to `127.0.0.1`, validates the exact bundled
+  router path before stopping a process, and never places an API key in router
+  arguments, environment variables, or logs.
+- Install upgrades stop the managed WSL router before replacing its executable
+  and restore it after installation when K3 is the active Codex route.
 
 ## [1.4.0] - 2026-08-10
 
