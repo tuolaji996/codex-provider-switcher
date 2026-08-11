@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = "1.4.0",
+    [string]$Version = "1.4.1",
     [string]$DotNet = "dotnet"
 )
 
@@ -47,6 +47,8 @@ foreach ($requiredFile in @(
     "CodexProviderKimiRouter.dll",
     "CodexProviderKimiRouter.deps.json",
     "CodexProviderKimiRouter.runtimeconfig.json",
+    "codex-provider-kimi-launcher.sh",
+    "linux-x64\CodexProviderKimiRouter",
     "WebView2Loader.dll",
     "install.ps1",
     "README.md",

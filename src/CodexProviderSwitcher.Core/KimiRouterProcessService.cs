@@ -435,7 +435,15 @@ public sealed class KimiRouterProcessService : IDisposable
             WorkingDirectory = Path.GetDirectoryName(fullPath) ?? AppContext.BaseDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden
+            WindowStyle = ProcessWindowStyle.Hidden,
+            // The legacy Windows router must never inherit the token broker's
+            // stdout/stderr pipe. If it did, a `--ensure-kimi-router` broker
+            // invocation could print the token but leave Codex waiting for the
+            // inherited pipe to close. The WSL launcher is the production
+            // route; this only preserves safe compatibility for older configs.
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
 
         // Do not pass arguments or API credentials. Remove inherited values

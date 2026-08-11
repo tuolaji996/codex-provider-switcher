@@ -23,6 +23,7 @@ public sealed class KimiRouterServer : IAsyncDisposable
     private const int MaxConcurrentRequests = 16;
     private static readonly TimeSpan RequestReadTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan QueueWaitTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan StreamHeartbeatInterval = TimeSpan.FromSeconds(8);
     private readonly KimiRouterOptions _options;
     private readonly HttpClient _httpClient;
     private readonly bool _disposeHttpClient;
@@ -371,6 +372,25 @@ public sealed class KimiRouterServer : IAsyncDisposable
         upstreamRequest.Headers.Accept.Add(
             new MediaTypeWithQualityHeaderValue(streamResponse ? "text/event-stream" : "application/json"));
 
+        if (streamResponse)
+        {
+            // Write the local response headers and the Responses created events
+            // before waiting for the upstream to accept the request. Codex can
+            // otherwise conclude that the loopback server disconnected while a
+            // slower relay is still establishing its first upstream byte.
+            await StreamTranslatedResponseAsync(
+                clientStream,
+                token => _httpClient.SendAsync(
+                    upstreamRequest,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    token),
+                requestedModel,
+                customToolNames,
+                chatRequest,
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         HttpResponseMessage upstreamResponse;
         try
         {
@@ -409,201 +429,257 @@ public sealed class KimiRouterServer : IAsyncDisposable
                     cancellationToken).ConfigureAwait(false);
                 return;
             }
-
-            if (!streamResponse)
+            try
             {
-                try
-                {
-                    var content = await ReadBoundedTextAsync(
-                        upstreamResponse.Content,
-                        MaxBodyBytes,
-                        cancellationToken).ConfigureAwait(false);
-                    var translated = KimiResponsesTranslator.TranslateNonStreaming(
-                        content,
-                        requestedModel,
-                        null,
-                        customToolNames);
-                    StoreNonStreamingHistory(chatRequest, content, translated);
-                    await WriteRawAsync(
-                        clientStream,
-                        HttpStatusCode.OK,
-                        "application/json; charset=utf-8",
-                        Encoding.UTF8.GetBytes(translated),
-                        cancellationToken).ConfigureAwait(false);
-                }
-                catch (JsonException)
-                {
-                    await WriteJsonAsync(
-                        clientStream,
-                        HttpStatusCode.BadGateway,
-                        ErrorBody("upstream_protocol_error", "The Kimi upstream returned invalid JSON."),
-                        cancellationToken).ConfigureAwait(false);
-                }
-                catch (InvalidDataException)
-                {
-                    await WriteJsonAsync(
-                        clientStream,
-                        HttpStatusCode.BadGateway,
-                        ErrorBody("upstream_protocol_error", "The Kimi upstream response was too large."),
-                        cancellationToken).ConfigureAwait(false);
-                }
-
-                return;
+                var content = await ReadBoundedTextAsync(
+                    upstreamResponse.Content,
+                    MaxBodyBytes,
+                    cancellationToken).ConfigureAwait(false);
+                var translated = KimiResponsesTranslator.TranslateNonStreaming(
+                    content,
+                    requestedModel,
+                    null,
+                    customToolNames);
+                StoreNonStreamingHistory(chatRequest, content, translated);
+                await WriteRawAsync(
+                    clientStream,
+                    HttpStatusCode.OK,
+                    "application/json; charset=utf-8",
+                    Encoding.UTF8.GetBytes(translated),
+                    cancellationToken).ConfigureAwait(false);
             }
-
-            await StreamTranslatedResponseAsync(
-                clientStream,
-                upstreamResponse,
-                requestedModel,
-                customToolNames,
-                chatRequest,
-                cancellationToken).ConfigureAwait(false);
+            catch (JsonException)
+            {
+                await WriteJsonAsync(
+                    clientStream,
+                    HttpStatusCode.BadGateway,
+                    ErrorBody("upstream_protocol_error", "The Kimi upstream returned invalid JSON."),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidDataException)
+            {
+                await WriteJsonAsync(
+                    clientStream,
+                    HttpStatusCode.BadGateway,
+                    ErrorBody("upstream_protocol_error", "The Kimi upstream response was too large."),
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
     private async Task StreamTranslatedResponseAsync(
         NetworkStream clientStream,
-        HttpResponseMessage upstreamResponse,
+        Func<CancellationToken, Task<HttpResponseMessage>> sendUpstreamAsync,
         string requestedModel,
         ISet<string> customToolNames,
         JsonObject chatRequest,
         CancellationToken cancellationToken)
     {
-        var headersWritten = false;
-        KimiResponsesStreamState? state = null;
-        List<KimiResponsesSseEvent>? events = null;
+        var events = new List<KimiResponsesSseEvent>();
+        var state = new KimiResponsesStreamState(
+            requestedModel,
+            null,
+            customToolNames,
+            events.Add);
         try
         {
-            await using var upstreamStream = await upstreamResponse.Content
-                .ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            using var reader = new StreamReader(upstreamStream, Encoding.UTF8);
-            var pending = new List<string>();
-            var pendingBytes = 0;
-            events = new List<KimiResponsesSseEvent>();
-            state = new KimiResponsesStreamState(
-                requestedModel,
-                null,
-                customToolNames,
-                events.Add);
-
             await WriteHeadersAsync(
                 clientStream,
                 HttpStatusCode.OK,
                 "text/event-stream; charset=utf-8",
                 "Cache-Control: no-cache\r\nTransfer-Encoding: chunked\r\n").ConfigureAwait(false);
-            headersWritten = true;
-
             state.EmitInitialEvents();
             await FlushEventsAsync(clientStream, events, cancellationToken).ConfigureAwait(false);
 
-            var sawDone = false;
-            while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+            HttpResponseMessage upstreamResponse;
+            try
             {
-                if (line.Length > MaxSseLineChars)
-                {
-                    throw new InvalidDataException("The Kimi upstream SSE line was too large.");
-                }
-
-                if (line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-                {
-                    var value = line[5..].TrimStart();
-                    if (value.Length > 0)
-                    {
-                        pendingBytes += Encoding.UTF8.GetByteCount(value);
-                        if (pendingBytes > MaxSseDataBytes)
-                        {
-                            throw new InvalidDataException("The Kimi upstream SSE event was too large.");
-                        }
-
-                        pending.Add(value);
-                    }
-
-                    continue;
-                }
-
-                // SSE permits comments and metadata fields. Unknown non-empty
-                // lines are rejected instead of being silently dropped.
-                if (line.Length != 0 &&
-                    !line.StartsWith(":", StringComparison.Ordinal) &&
-                    !line.StartsWith("event:", StringComparison.OrdinalIgnoreCase) &&
-                    !line.StartsWith("id:", StringComparison.OrdinalIgnoreCase) &&
-                    !line.StartsWith("retry:", StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new JsonException("The Kimi upstream returned malformed SSE.");
-                }
-
-                if (line.Length != 0 || pending.Count == 0)
-                {
-                    continue;
-                }
-
-                var data = string.Join("\n", pending);
-                pending.Clear();
-                pendingBytes = 0;
-                if (data == "[DONE]")
-                {
-                    sawDone = true;
-                    break;
-                }
-
-                if (!TryParseJson(data, out var chunk))
-                {
-                    throw new JsonException("The Kimi upstream returned invalid SSE JSON.");
-                }
-
-                using (chunk)
-                {
-                    state.ProcessChunk(chunk.RootElement);
-                }
-
-                await FlushEventsAsync(clientStream, events, cancellationToken).ConfigureAwait(false);
+                var upstreamTask = sendUpstreamAsync(cancellationToken);
+                upstreamResponse = await AwaitUpstreamWithHeartbeatsAsync(
+                    clientStream,
+                    upstreamTask,
+                    cancellationToken).ConfigureAwait(false);
             }
-
-            if (!sawDone)
+            catch (HttpRequestException)
             {
-                throw new InvalidDataException("The Kimi upstream SSE stream ended before [DONE].");
+                await FailStreamingResponseAsync(
+                    clientStream,
+                    state,
+                    events,
+                    "upstream_unavailable",
+                    "The Kimi upstream could not be reached.",
+                    cancellationToken).ConfigureAwait(false);
+                return;
             }
-
-            state.Complete();
-            await FlushEventsAsync(clientStream, events, cancellationToken).ConfigureAwait(false);
-            var historyMessages = (chatRequest["messages"] as JsonArray)?.DeepClone() as JsonArray ?? new JsonArray();
-            historyMessages.Add(state.BuildAssistantMessageForHistory());
-            _historyCache.Store(state.ResponseId, historyMessages);
-            await WriteChunkTerminatorAsync(clientStream, cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            if (headersWritten && state is not null)
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                state.Fail("upstream_timeout", "The Kimi upstream timed out.");
-                if (events is not null)
-                {
-                    await FlushEventsAsync(clientStream, events, cancellationToken).ConfigureAwait(false);
-                    await WriteChunkTerminatorAsync(clientStream, cancellationToken).ConfigureAwait(false);
-                }
+                await FailStreamingResponseAsync(
+                    clientStream,
+                    state,
+                    events,
+                    "upstream_timeout",
+                    "The Kimi upstream timed out.",
+                    cancellationToken).ConfigureAwait(false);
                 return;
             }
 
-            throw;
-        }
-        catch (Exception exception) when (exception is JsonException or InvalidDataException or HttpRequestException)
-        {
-            if (!headersWritten || state is null)
+            using (upstreamResponse)
             {
-                throw;
-            }
+                if (!upstreamResponse.IsSuccessStatusCode)
+                {
+                    await FailStreamingResponseAsync(
+                        clientStream,
+                        state,
+                        events,
+                        "upstream_http_error",
+                        $"The Kimi upstream returned HTTP {(int)upstreamResponse.StatusCode}.",
+                        cancellationToken).ConfigureAwait(false);
+                    return;
+                }
 
-            state.Fail(
-                exception is InvalidDataException ? "upstream_truncated" : "malformed_sse",
-                exception is InvalidDataException
-                    ? exception.Message
-                    : "The Kimi upstream returned a malformed response.");
-            if (events is not null)
-            {
+                await using var upstreamStream = await upstreamResponse.Content
+                    .ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                using var reader = new StreamReader(upstreamStream, Encoding.UTF8);
+                var pending = new List<string>();
+                var pendingBytes = 0;
+
+                var sawDone = false;
+                while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+                {
+                    if (line.Length > MaxSseLineChars)
+                    {
+                        throw new InvalidDataException("The Kimi upstream SSE line was too large.");
+                    }
+
+                    if (line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var value = line[5..].TrimStart();
+                        if (value.Length > 0)
+                        {
+                            pendingBytes += Encoding.UTF8.GetByteCount(value);
+                            if (pendingBytes > MaxSseDataBytes)
+                            {
+                                throw new InvalidDataException("The Kimi upstream SSE event was too large.");
+                            }
+
+                            pending.Add(value);
+                        }
+
+                        continue;
+                    }
+
+                    // SSE permits comments and metadata fields. Unknown non-empty
+                    // lines are rejected instead of being silently dropped.
+                    if (line.Length != 0 &&
+                        !line.StartsWith(":", StringComparison.Ordinal) &&
+                        !line.StartsWith("event:", StringComparison.OrdinalIgnoreCase) &&
+                        !line.StartsWith("id:", StringComparison.OrdinalIgnoreCase) &&
+                        !line.StartsWith("retry:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new JsonException("The Kimi upstream returned malformed SSE.");
+                    }
+
+                    if (line.Length != 0 || pending.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    var data = string.Join("\n", pending);
+                    pending.Clear();
+                    pendingBytes = 0;
+                    if (data == "[DONE]")
+                    {
+                        sawDone = true;
+                        break;
+                    }
+
+                    if (!TryParseJson(data, out var chunk))
+                    {
+                        throw new JsonException("The Kimi upstream returned invalid SSE JSON.");
+                    }
+
+                    using (chunk)
+                    {
+                        state.ProcessChunk(chunk.RootElement);
+                    }
+
+                    await FlushEventsAsync(clientStream, events, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (!sawDone)
+                {
+                    throw new InvalidDataException("The Kimi upstream SSE stream ended before [DONE].");
+                }
+
+                state.Complete();
                 await FlushEventsAsync(clientStream, events, cancellationToken).ConfigureAwait(false);
+                var historyMessages = (chatRequest["messages"] as JsonArray)?.DeepClone() as JsonArray ?? new JsonArray();
+                historyMessages.Add(state.BuildAssistantMessageForHistory());
+                _historyCache.Store(state.ResponseId, historyMessages);
                 await WriteChunkTerminatorAsync(clientStream, cancellationToken).ConfigureAwait(false);
             }
         }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            await FailStreamingResponseAsync(
+                clientStream,
+                state,
+                events,
+                "upstream_timeout",
+                "The Kimi upstream timed out.",
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is JsonException or InvalidDataException or HttpRequestException or IOException)
+        {
+            await FailStreamingResponseAsync(
+                clientStream,
+                state,
+                events,
+                exception is InvalidDataException or IOException
+                    ? "upstream_truncated"
+                    : "malformed_sse",
+                exception is InvalidDataException or IOException
+                    ? exception.Message
+                    : "The Kimi upstream returned a malformed response.",
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<HttpResponseMessage> AwaitUpstreamWithHeartbeatsAsync(
+        NetworkStream clientStream,
+        Task<HttpResponseMessage> upstreamTask,
+        CancellationToken cancellationToken)
+    {
+        while (!upstreamTask.IsCompleted)
+        {
+            var heartbeat = Task.Delay(StreamHeartbeatInterval, cancellationToken);
+            if (await Task.WhenAny(upstreamTask, heartbeat).ConfigureAwait(false) == upstreamTask)
+            {
+                break;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            await WriteChunkAsync(
+                clientStream,
+                ": keep-alive\n\n",
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return await upstreamTask.ConfigureAwait(false);
+    }
+
+    private static async Task FailStreamingResponseAsync(
+        NetworkStream clientStream,
+        KimiResponsesStreamState state,
+        List<KimiResponsesSseEvent> events,
+        string code,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        state.Fail(code, message);
+        await FlushEventsAsync(clientStream, events, cancellationToken).ConfigureAwait(false);
+        await WriteChunkTerminatorAsync(clientStream, cancellationToken).ConfigureAwait(false);
     }
 
     private void StoreNonStreamingHistory(JsonObject chatRequest, string upstreamJson, string translatedJson)

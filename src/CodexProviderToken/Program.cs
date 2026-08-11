@@ -43,11 +43,16 @@ try
 {
     if (ensureKimiRouter)
     {
-        var routerPath = Path.Combine(
+        // v1.4.0 generated auth commands with --ensure-kimi-router. Preserve
+        // those configs during an in-place upgrade, but route the compatibility
+        // action through the WSL-local launcher used by v1.4.1. Starting the
+        // legacy Windows listener would put it in the wrong loopback namespace
+        // and could also keep the credential command's stdout pipe open.
+        var launcherPath = Path.Combine(
             AppContext.BaseDirectory,
-            AppPaths.KimiRouterExecutableName);
-        using var routerService = new KimiRouterProcessService();
-        var router = await routerService.EnsureRunningAsync(routerPath);
+            AppPaths.KimiWslLauncherFileName);
+        var routerService = new WslKimiRouterService();
+        var router = await routerService.EnsureRunningAsync(launcherPath);
         if (!router.Success)
         {
             Console.Error.WriteLine(router.Summary);

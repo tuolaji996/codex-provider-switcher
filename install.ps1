@@ -21,6 +21,10 @@ $previousDirectory = Join-Path $programsRoot "CodexProviderSwitcher.previous-$op
 $appSource = Join-Path $PublishDirectory "CodexProviderSwitcher.exe"
 $brokerSource = Join-Path $PublishDirectory "CodexProviderToken.exe"
 $routerSource = Join-Path $PublishDirectory "CodexProviderKimiRouter.exe"
+$wslLauncherName = "codex-provider-kimi-launcher.sh"
+$linuxRouterRelativePath = "linux-x64\CodexProviderKimiRouter"
+$wslLauncherSource = Join-Path $PublishDirectory $wslLauncherName
+$linuxRouterSource = Join-Path $PublishDirectory $linuxRouterRelativePath
 $webViewLoaderSource = Join-Path $PublishDirectory "WebView2Loader.dll"
 $routerSupportFiles = @(
     "CodexProviderKimiRouter.dll",
@@ -59,6 +63,61 @@ function Stop-AndWaitForProcess {
     throw "$DisplayName is still running. Close it and run the installer again."
 }
 
+function Convert-ToWslPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WindowsPath
+    )
+
+    $output = @(& wsl.exe --exec wslpath -a $WindowsPath 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $output.Count -eq 0) {
+        throw "Could not convert the K3 launcher path for WSL: $WindowsPath"
+    }
+
+    $converted = $output[0].Trim()
+    if ([string]::IsNullOrWhiteSpace($converted)) {
+        throw "WSL returned an empty K3 launcher path."
+    }
+
+    return $converted
+}
+
+function Invoke-WslKimiLauncher {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LauncherWindowsPath,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("--ensure-only", "--stop")]
+        [string]$Action
+    )
+
+    if (-not (Test-Path -LiteralPath $LauncherWindowsPath -PathType Leaf)) {
+        if ($Action -eq "--stop") {
+            return
+        }
+
+        throw "K3 WSL launcher was not found: $LauncherWindowsPath"
+    }
+
+    $launcherWslPath = Convert-ToWslPath -WindowsPath $LauncherWindowsPath
+    & wsl.exe --exec /bin/sh $launcherWslPath $Action
+    if ($LASTEXITCODE -ne 0) {
+        throw "K3 WSL launcher failed with exit code $LASTEXITCODE ($Action)."
+    }
+}
+
+function Test-KimiConfigurationActive {
+    $configPath = Join-Path $env:USERPROFILE ".codex\config.toml"
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+        return $false
+    }
+
+    $content = Get-Content -LiteralPath $configPath -Raw
+    $hasLoopback = $content -match '(?m)^\s*base_url\s*=\s*"http://127\.0\.0\.1:17866/v1"\s*$'
+    $hasManagedCatalog = $content -match '(?m)^\s*model_catalog_json\s*=\s*"codex-provider-switcher-kimi-model-catalog\.json"\s*$'
+    return $hasLoopback -and $hasManagedCatalog
+}
+
 if (-not (Test-Path -LiteralPath $appSource)) {
     throw "Published GUI was not found: $appSource"
 }
@@ -69,6 +128,14 @@ if (-not (Test-Path -LiteralPath $brokerSource)) {
 
 if (-not (Test-Path -LiteralPath $routerSource)) {
     throw "Published Kimi router was not found: $routerSource"
+}
+
+if (-not (Test-Path -LiteralPath $wslLauncherSource -PathType Leaf)) {
+    throw "Published K3 WSL launcher was not found: $wslLauncherSource"
+}
+
+if (-not (Test-Path -LiteralPath $linuxRouterSource -PathType Leaf)) {
+    throw "Published Linux K3 router was not found: $linuxRouterSource"
 }
 
 foreach ($routerSupportFile in $routerSupportFiles) {
@@ -94,6 +161,8 @@ try {
     if (-not (Test-Path -LiteralPath (Join-Path $stageDirectory "CodexProviderSwitcher.exe")) -or
         -not (Test-Path -LiteralPath (Join-Path $stageDirectory "CodexProviderToken.exe")) -or
         -not (Test-Path -LiteralPath (Join-Path $stageDirectory "CodexProviderKimiRouter.exe")) -or
+        -not (Test-Path -LiteralPath (Join-Path $stageDirectory $wslLauncherName)) -or
+        -not (Test-Path -LiteralPath (Join-Path $stageDirectory $linuxRouterRelativePath)) -or
         -not (Test-Path -LiteralPath (Join-Path $stageDirectory "WebView2Loader.dll"))) {
         throw "The staged installation is incomplete."
     }
@@ -112,6 +181,8 @@ catch {
     throw
 }
 
+$k3WasActive = Test-KimiConfigurationActive
+$oldWslLauncher = Join-Path $installDirectory $wslLauncherName
 try {
     # Use exact process names only. The GUI and router are the only processes
     # owned by this installation that can lock the directory being replaced.
@@ -121,6 +192,9 @@ try {
     Stop-AndWaitForProcess `
         -ProcessName "CodexProviderKimiRouter" `
         -DisplayName "Codex Provider Kimi Router"
+    Invoke-WslKimiLauncher `
+        -LauncherWindowsPath $oldWslLauncher `
+        -Action "--stop"
 }
 catch {
     if (Test-Path -LiteralPath $stageDirectory) {
@@ -136,14 +210,47 @@ try {
     }
 
     Move-Item -LiteralPath $stageDirectory -Destination $installDirectory
+
+    if ($k3WasActive) {
+        Invoke-WslKimiLauncher `
+            -LauncherWindowsPath (Join-Path $installDirectory $wslLauncherName) `
+            -Action "--ensure-only"
+    }
 }
 catch {
+    $installFailed = $_
+    $newWslLauncher = Join-Path $installDirectory $wslLauncherName
+    try {
+        Invoke-WslKimiLauncher `
+            -LauncherWindowsPath $newWslLauncher `
+            -Action "--stop"
+    }
+    catch {
+        # Continue the filesystem rollback even if the failed new router did
+        # not stop cleanly; the original installation is still recoverable.
+    }
+
+    if (Test-Path -LiteralPath $installDirectory) {
+        Remove-Item -LiteralPath $installDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if (-not (Test-Path -LiteralPath $installDirectory) -and
         (Test-Path -LiteralPath $previousDirectory)) {
         Move-Item -LiteralPath $previousDirectory -Destination $installDirectory
     }
 
-    throw
+    if ($k3WasActive) {
+        try {
+            Invoke-WslKimiLauncher `
+                -LauncherWindowsPath (Join-Path $installDirectory $wslLauncherName) `
+                -Action "--ensure-only"
+        }
+        catch {
+            # Preserve the original installation even if its optional WSL
+            # launcher cannot be restarted. The original failure is reported.
+        }
+    }
+
+    throw $installFailed
 }
 finally {
     if (Test-Path -LiteralPath $stageDirectory) {

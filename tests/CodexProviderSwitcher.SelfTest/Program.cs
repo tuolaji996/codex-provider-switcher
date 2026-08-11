@@ -958,7 +958,11 @@ Check(
     AppPaths.KimiRouterBaseUrl == "http://127.0.0.1:17866/v1" &&
     AppPaths.KimiModelCatalogFileName ==
         "codex-provider-switcher-kimi-model-catalog.json" &&
-    AppPaths.KimiRouterExecutableName == "CodexProviderKimiRouter.exe",
+    AppPaths.KimiRouterExecutableName == "CodexProviderKimiRouter.exe" &&
+    AppPaths.KimiLinuxRouterDirectoryName == "linux-x64" &&
+    AppPaths.KimiLinuxRouterExecutableName == "CodexProviderKimiRouter" &&
+    AppPaths.KimiWslLauncherFileName == "codex-provider-kimi-launcher.sh" &&
+    AppPaths.KimiAuthRefreshIntervalMilliseconds == 30000,
     "Kimi provider constants did not match the stable router contract.");
 
 var expectedRouterHealthHandler = new ModelDiscoveryStubHttpMessageHandler(
@@ -1166,7 +1170,17 @@ Check(
     kimiStatus.CredentialTarget == profileCredentialTarget &&
     kimiConfig.Contains(
         $"model_catalog_json = \"{AppPaths.KimiModelCatalogFileName}\"",
-        StringComparison.Ordinal),
+        StringComparison.Ordinal) &&
+    kimiConfig.Contains(
+        "command = \"/bin/sh\"",
+        StringComparison.Ordinal) &&
+    kimiConfig.Contains(
+        "/CodexProviderSwitcher/codex-provider-kimi-launcher.sh",
+        StringComparison.Ordinal) &&
+    kimiConfig.Contains(
+        $"refresh_interval_ms = {AppPaths.KimiAuthRefreshIntervalMilliseconds}",
+        StringComparison.Ordinal) &&
+    !kimiConfig.Contains("--ensure-kimi-router", StringComparison.Ordinal),
     "Kimi config generation did not route through the managed loopback catalog.");
 Check(
     service.BuildKimiConfig(

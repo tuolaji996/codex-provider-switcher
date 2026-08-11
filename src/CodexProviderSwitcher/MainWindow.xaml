@@ -132,7 +132,7 @@
                                    VerticalAlignment="Center" />
                         <TextBlock x:Name="VersionText"
                                    Grid.Column="2"
-                                   Text="v1.4.0"
+                                   Text="v1.4.1"
                                    Foreground="{DynamicResource SubtleTextBrush}"
                                    FontSize="10"
                                    Margin="8,0,0,0"
@@ -480,6 +480,7 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBlock x:Name="ThirdPartyTitleText"
                                    Text="第三方线路"
@@ -490,7 +491,62 @@
                                    Style="{StaticResource PageLeadStyle}"
                                    Margin="0,0,0,16" />
 
-                        <Grid Grid.Row="2" Margin="0,0,0,12">
+                        <Border Grid.Row="2"
+                                Margin="0,0,0,14"
+                                Padding="14,12"
+                                Background="{DynamicResource SurfaceAltBrush}"
+                                BorderBrush="{DynamicResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="8">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock x:Name="SavedProfileLabelText"
+                                               Text="已保存账号"
+                                               FontSize="13"
+                                               FontWeight="SemiBold" />
+                                    <TextBlock x:Name="SavedProfileDescriptionText"
+                                               Text="选择只会载入草稿；点击切换成功后才会成为当前线路。"
+                                               Foreground="{DynamicResource SubtleTextBrush}"
+                                               FontSize="11"
+                                               Margin="0,3,0,0"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Button x:Name="NewProviderProfileButton"
+                                        Grid.Column="1"
+                                        Content="添加账号"
+                                        Tag="&#xE710;"
+                                        Style="{StaticResource SecondaryButton}"
+                                        MinHeight="32"
+                                        Padding="12,5"
+                                        Margin="12,0,0,0"
+                                        VerticalAlignment="Center"
+                                        Click="NewProviderProfileButton_Click" />
+                                <ComboBox x:Name="ProviderProfileComboBox"
+                                          Grid.Row="1"
+                                          Grid.ColumnSpan="2"
+                                          IsTextSearchEnabled="False"
+                                          MinHeight="48"
+                                          Padding="10,6"
+                                          FontSize="13"
+                                          Margin="0,12,0,0"
+                                          Background="{DynamicResource InputBrush}"
+                                          Foreground="{DynamicResource TextBrush}"
+                                          BorderBrush="{DynamicResource BorderBrush}"
+                                          BorderThickness="1"
+                                          HorizontalContentAlignment="Left"
+                                          SelectionChanged="ProviderProfileComboBox_SelectionChanged" />
+                            </Grid>
+                        </Border>
+
+                        <Grid Grid.Row="3" Margin="0,0,0,12">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="132" />
                                 <ColumnDefinition Width="*" />
@@ -504,7 +560,7 @@
                                      TextChanged="ProviderSettingsTextBox_TextChanged" />
                         </Grid>
 
-                        <Grid Grid.Row="3" Margin="0,0,0,12">
+                        <Grid Grid.Row="4" Margin="0,0,0,12">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="132" />
                                 <ColumnDefinition Width="*" />
@@ -553,7 +609,7 @@
                             </Grid>
                         </Grid>
 
-                        <Grid Grid.Row="4" Margin="0,0,0,14">
+                        <Grid Grid.Row="5" Margin="0,0,0,14">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="132" />
                                 <ColumnDefinition Width="*" />
@@ -595,7 +651,7 @@
                             </StackPanel>
                         </Grid>
 
-                        <Border Grid.Row="5"
+                        <Border Grid.Row="6"
                                 Background="{DynamicResource WarningSurfaceBrush}"
                                 BorderBrush="{DynamicResource WarningBrush}"
                                 BorderThickness="1"
@@ -1217,7 +1273,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Margin="0,0,20,0">
                                 <TextBlock x:Name="SettingsVersionText"
-                                           Text="Codex Provider Switcher v1.4.0"
+                                           Text="Codex Provider Switcher v1.4.1"
                                            FontWeight="SemiBold"
                                            FontSize="13" />
                                 <TextBlock x:Name="SettingsStorageDescriptionText"

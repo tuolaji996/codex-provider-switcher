@@ -43,11 +43,11 @@ setting. It then offers four equally valid choices:
 - **Connect SuiXiang K3 (experimental)** uses a SuiXiang API key for **`k3`**.
   An existing key saved for the exact normalized SuiXiang Base URL can be
   reused by leaving the key field blank; a key from any other URL is never
-  reused. The app health-checks and starts the bundled local router, builds its
-  managed model catalog, runs a live loopback Responses test, then stops and
-  restarts Codex around the startup-only catalog/config write. Other SuiXiang
-  model IDs remain ordinary direct Responses routes; only `k3` uses the
-  experimental bridge.
+  reused. The app verifies SuiXiang's upstream Chat Completions endpoint,
+  health-checks and starts the bundled Linux router inside WSL, then builds its
+  managed model catalog and restarts Codex around the startup-only
+  catalog/config write. Other SuiXiang model IDs remain ordinary direct
+  Responses routes; only `k3` uses the experimental bridge.
 - **Use another service** accepts an OpenAI-compatible Base URL, model, and a
   newly generated API key.
 - **Use official Codex for now** keeps the current official route unchanged.
@@ -77,11 +77,14 @@ currently entered Base URL only, never reusing a key from another profile. A
 missing current model is retained and called out as still requiring a live
 compatibility test. SuiXiang refreshes its list dynamically and every switch
 performs a fresh Responses compatibility test; any SuiXiang failure is fail
-closed, with no write-anyway option. SuiXiang K3 discovery is limited to `k3`.
+closed, with no write-anyway option. Select `k3` to use the experimental
+bridge; any other listed SuiXiang model uses direct SuiXiang Responses. The
+Providers page also lets you create and select multiple saved key profiles,
+including multiple keys for the same SuiXiang Base URL.
 
 ## Interface
 
-Version 1.4.0 uses a compact native Windows workspace:
+Version 1.4.1 uses a compact native Windows workspace:
 
 - **Home:** current route, shared-history health, and quick switching.
 - **Providers:** official OpenAI and third-party endpoint, model, and key
@@ -92,11 +95,13 @@ Version 1.4.0 uses a compact native Windows workspace:
 - **Settings:** language, appearance, restart behavior, Sol Ultra readiness,
   optional Luna task agent, automatic update status, and local data access.
 
-The SuiXiang K3 route is experimental and intentionally limited to text Responses and
-ordinary function tools. It does not promise image generation, Mobile Remote,
-or native Codex plugin/app transports. Its API key remains scoped to the
-SuiXiang upstream profile while Codex itself talks only to the local
-`127.0.0.1:17866/v1` router.
+The SuiXiang K3 route is experimental and intentionally limited to text
+Responses and ordinary function tools. It does not promise image generation,
+Mobile Remote, or native Codex plugin/app transports. Its API key remains
+scoped to the SuiXiang upstream profile while Codex itself talks only to the
+WSL-local `127.0.0.1:17866/v1` router. The release also retains a Windows
+router binary for migration and diagnostics, but active Codex traffic does not
+cross the Windows/WSL loopback boundary.
 
 In Simplified Chinese Codex builds, xhigh and Ultra can both appear as `极高`.
 Ultra is the bottom item with the `更快消耗使用额度` warning. The switcher checks
@@ -132,8 +137,9 @@ silently; the user chooses the release asset from GitHub.
 - Session JSONL files and chat bodies are not rewritten during provider switches.
 - The GUI requires a complete `/v1/responses` SSE result because Codex does not
   use the Chat Completions wire protocol for custom providers.
-- SuiXiang K3 switching starts the bundled router only after a local health check; the
-  router is launched without API keys or secrets in command-line arguments.
+- SuiXiang K3 switching starts the bundled WSL-local router only after an
+  upstream compatibility test and an in-WSL health check. The router is
+  launched without API keys or secrets in command-line arguments or logs.
 
 An API key pasted into a chat must be considered exposed. Revoke it at the
 provider and create a new one before saving it in this app.
@@ -243,7 +249,7 @@ already included on the target machine. A .NET 8 SDK is needed only to build.
 To create the versioned ZIP and SHA-256 file used by GitHub Releases:
 
 ```powershell
-.\release.ps1 -Version 1.4.0 -DotNet "C:\path\to\dotnet.exe"
+.\release.ps1 -Version 1.4.1 -DotNet "C:\path\to\dotnet.exe"
 ```
 
 The installed files are placed in:
