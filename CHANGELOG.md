@@ -22,6 +22,9 @@ All notable changes to this project are documented here.
 - Existing v1.4.0 K3 auth commands that still contain
   `--ensure-kimi-router` are migrated in place at runtime to the WSL launcher,
   so an upgrade does not require the user to switch away and back first.
+- In-place installs now convert the previous launcher's Windows path without
+  relying on `wslpath` argument parsing, and wait for the WSL stop/start command
+  by its process exit code before replacing files.
 - Streaming K3 requests establish the local SSE response before waiting for a
   slow upstream first byte and keep the connection alive while the upstream is
   still working. Post-header failures are returned as Responses failure events
