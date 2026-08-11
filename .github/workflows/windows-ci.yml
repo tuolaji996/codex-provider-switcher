@@ -44,6 +44,15 @@ jobs:
         shell: pwsh
         run: ./tools/scan-secrets.ps1
 
+      - name: Validate WSL launcher
+        shell: bash
+        run: |
+          if grep -q $'\r' scripts/codex-provider-kimi-launcher.sh; then
+            echo "WSL launcher must use LF line endings."
+            exit 1
+          fi
+          sh -n scripts/codex-provider-kimi-launcher.sh
+
       - name: Publish and run self-tests
         shell: pwsh
         run: ./build.ps1

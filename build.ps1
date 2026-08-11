@@ -155,6 +155,9 @@ $kimiLauncher = Join-Path $root "scripts\codex-provider-kimi-launcher.sh"
 if (-not (Test-Path -LiteralPath $kimiLauncher -PathType Leaf)) {
     throw "K3 WSL launcher was not found: $kimiLauncher"
 }
+if ([IO.File]::ReadAllText($kimiLauncher).Contains("`r")) {
+    throw "K3 WSL launcher must use LF line endings: $kimiLauncher"
+}
 Copy-Item `
     -LiteralPath $kimiLauncher `
     -Destination (Join-Path $publish "codex-provider-kimi-launcher.sh") `
