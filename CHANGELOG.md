@@ -27,6 +27,9 @@ All notable changes to this project are documented here.
   by its process exit code before replacing files.
 - The WSL launcher is now pinned to LF line endings in Git, and both local
   release builds and Windows CI reject CRLF shell scripts before packaging.
+- Upgrade recovery uses the new staged launcher to stop the exact previously
+  installed Linux router, so a missing or malformed old launcher cannot block
+  its own replacement.
 - Streaming K3 requests establish the local SSE response before waiting for a
   slow upstream first byte and keep the connection alive while the upstream is
   still working. Post-header failures are returned as Responses failure events
