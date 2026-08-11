@@ -69,17 +69,19 @@ function Convert-ToWslPath {
         [string]$WindowsPath
     )
 
-    $output = @(& wsl.exe --exec wslpath -a $WindowsPath 2>$null)
-    if ($LASTEXITCODE -ne 0 -or $output.Count -eq 0) {
-        throw "Could not convert the K3 launcher path for WSL: $WindowsPath"
+    $fullPath = [IO.Path]::GetFullPath($WindowsPath)
+    if ($fullPath.Length -lt 3 -or
+        $fullPath[1] -ne ':' -or
+        ($fullPath[2] -ne '\' -and $fullPath[2] -ne '/')) {
+        throw "The K3 launcher must use an absolute local Windows drive path: $WindowsPath"
     }
 
-    $converted = $output[0].Trim()
-    if ([string]::IsNullOrWhiteSpace($converted)) {
-        throw "WSL returned an empty K3 launcher path."
-    }
-
-    return $converted
+    # Match ConfigService.ToWslPath. Calling wslpath through wsl.exe can lose
+    # Windows backslashes before wslpath receives the argument, which breaks an
+    # in-place upgrade once the previous installation already has a launcher.
+    $drive = [char]::ToLowerInvariant($fullPath[0])
+    $relative = $fullPath.Substring(3).Replace('\', '/')
+    return "/mnt/$drive/$relative"
 }
 
 function Invoke-WslKimiLauncher {
@@ -100,9 +102,14 @@ function Invoke-WslKimiLauncher {
     }
 
     $launcherWslPath = Convert-ToWslPath -WindowsPath $LauncherWindowsPath
-    & wsl.exe --exec /bin/sh $launcherWslPath $Action
-    if ($LASTEXITCODE -ne 0) {
-        throw "K3 WSL launcher failed with exit code $LASTEXITCODE ($Action)."
+    $process = Start-Process `
+        -FilePath "wsl.exe" `
+        -ArgumentList @("--exec", "/bin/sh", $launcherWslPath, $Action) `
+        -NoNewWindow `
+        -Wait `
+        -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "K3 WSL launcher failed with exit code $($process.ExitCode) ($Action)."
     }
 }
 
