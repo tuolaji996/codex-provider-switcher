@@ -18,11 +18,18 @@ public sealed partial class ConnectionTestService
     private readonly HttpClient _client;
 
     public ConnectionTestService()
-    {
-        _client = new HttpClient
+        : this(new HttpClient
         {
             Timeout = TimeSpan.FromMinutes(3)
-        };
+        })
+    {
+    }
+
+    // The GUI uses the default client; the injectable client keeps protocol
+    // tests deterministic without sending test traffic to a real provider.
+    public ConnectionTestService(HttpClient client)
+    {
+        _client = client ?? throw new ArgumentNullException(nameof(client));
     }
 
     public async Task<ConnectionTestResult> TestResponsesApiAsync(
@@ -60,7 +67,11 @@ public sealed partial class ConnectionTestService
                 F(
                     "Responses 流报告失败：{0}",
                     "The Responses stream reported a failure: {0}",
-                    stream.Error ?? T("未提供错误详情。", "No error details were provided.")),
+                    string.IsNullOrWhiteSpace(stream.Error)
+                        ? T(
+                            "上游返回了 response.failed，但没有附带错误消息。",
+                            "The upstream returned response.failed without an error message.")
+                        : stream.Error),
                 transport.StatusCode);
         }
 
@@ -881,9 +892,22 @@ public sealed partial class ConnectionTestService
         }
 
         if (root.TryGetProperty("error", out var error) &&
-            error.ValueKind == JsonValueKind.Object)
+            error.ValueKind is JsonValueKind.Object or JsonValueKind.String)
         {
-            accumulator.Error ??= ReadString(error, "message") ?? ReadString(error, "code");
+            accumulator.Failed = true;
+            accumulator.Error ??= ReadErrorDescription(error);
+        }
+
+        // Some relays emit a terminal response.failed/response.error event
+        // without the nested response object. Preserve its top-level message
+        // or code so the UI does not reduce a real upstream failure to a
+        // misleading "no error details" message.
+        if (accumulator.Failed)
+        {
+            accumulator.Error ??= FirstNonBlank(
+                ReadString(root, "message"),
+                ReadString(root, "code"),
+                ReadString(root, "type"));
         }
     }
 
@@ -903,10 +927,10 @@ public sealed partial class ConnectionTestService
         }
 
         if (response.TryGetProperty("error", out var error) &&
-            error.ValueKind == JsonValueKind.Object)
+            error.ValueKind is JsonValueKind.Object or JsonValueKind.String)
         {
             accumulator.Failed = true;
-            accumulator.Error ??= ReadString(error, "message") ?? ReadString(error, "code");
+            accumulator.Error ??= ReadErrorDescription(error);
         }
 
         if (!response.TryGetProperty("output", out var output) ||
@@ -971,6 +995,27 @@ public sealed partial class ConnectionTestService
             ? value.GetString()
             : null;
     }
+
+    private static string? ReadErrorDescription(JsonElement error)
+    {
+        if (error.ValueKind == JsonValueKind.String)
+        {
+            return FirstNonBlank(error.GetString());
+        }
+
+        if (error.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return FirstNonBlank(
+            ReadString(error, "message"),
+            ReadString(error, "code"),
+            ReadString(error, "type"));
+    }
+
+    private static string? FirstNonBlank(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 
     private static byte[]? TryDecodeBase64(string? value)
     {

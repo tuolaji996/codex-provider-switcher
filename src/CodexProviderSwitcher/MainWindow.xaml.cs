@@ -1531,7 +1531,9 @@ public partial class MainWindow : Window
             ConnectionTestResult result;
             try
             {
-                result = await TestConnectionAsync(profile.BaseUrl, profile.Model, key);
+                result = IsKimiProfile(profile)
+                    ? await TestKimiConnectionAsync(profile.Model, key)
+                    : await TestConnectionAsync(profile.BaseUrl, profile.Model, key);
             }
             catch
             {
@@ -1545,9 +1547,7 @@ public partial class MainWindow : Window
             {
                 _settings.LastSuccessfulCompatibilityTestUtc = DateTimeOffset.UtcNow;
                 _settings.LastTestedEndpointFingerprint =
-                    ConnectionTestService.EndpointFingerprint(
-                        profile.BaseUrl,
-                        profile.Model);
+                    CompatibilityFingerprint(profile);
             }
             else
             {
@@ -1564,6 +1564,42 @@ public partial class MainWindow : Window
                 MessageBoxButton.OK,
                 result.Success ? MessageBoxImage.Information : MessageBoxImage.Warning);
         });
+    }
+
+    private async Task<ConnectionTestResult> TestKimiConnectionAsync(
+        string model,
+        string apiKey)
+    {
+        OperationStatusText.Text = T(
+            "正在确保 WSL 内的随想 K3 路由器可用…",
+            "Ensuring the SuiXiang K3 router inside WSL is ready...");
+        var router = await _wslKimiRouterService.EnsureRunningAsync(
+            KimiWslLauncherPath,
+            CancellationToken.None);
+        if (!router.Success)
+        {
+            return new ConnectionTestResult(false, router.Summary);
+        }
+
+        OperationStatusText.Text = T(
+            "正在测试随想 K3 上游 Chat Completions…",
+            "Testing the SuiXiang K3 upstream Chat Completions...");
+        var upstream = await _connectionTestService.TestChatCompletionsApiAsync(
+            AppPaths.KimiUpstreamBaseUrl,
+            model,
+            apiKey,
+            CancellationToken.None);
+        return upstream.Success
+            ? new ConnectionTestResult(
+                true,
+                T(
+                    "连接成功：WSL 路由器健康检查、随想 K3 上游 Chat Completions 与认证均可用。",
+                    "Connection succeeded: the WSL router health check, SuiXiang K3 upstream Chat Completions, and authentication are available."),
+                upstream.StatusCode)
+            : new ConnectionTestResult(
+                false,
+                DescribeKimiCompatibilityFailure(upstream),
+                upstream.StatusCode);
     }
 
     private async void RefreshCapabilitiesButton_Click(object sender, RoutedEventArgs e)
@@ -2443,20 +2479,44 @@ public partial class MainWindow : Window
         string normalizedBaseUrl,
         string model)
     {
-        // A draft selection owns its own credential slot.  Never collapse it
-        // into another profile merely because both use the same SuiXiang URL.
-        // This is what makes multiple accounts/keys for one provider reliable.
+        // A draft selection owns its own credential slot. Never mutate that
+        // saved account into another model/route when the user edits the
+        // fields; that used to make the K3 account disappear when switching
+        // back to SuiXiang OpenAI. A changed endpoint or model starts a new
+        // profile and therefore requires an explicitly entered key.
         var profile = _isNewProviderProfileDraft
             ? null
             : DraftProviderProfile;
+        var exactMatches = new List<ProviderProfile>();
+        if (profile is not null &&
+            (!ProfileMatchesBaseUrl(profile, normalizedBaseUrl) ||
+             !string.Equals(profile.Model.Trim(), model.Trim(), StringComparison.Ordinal)))
+        {
+            var editedProfileId = profile.Id;
+            // If the user edited the fields instead of picking the saved
+            // account explicitly, reuse an exact saved endpoint/model match
+            // only when it is unambiguous. Multiple keys may intentionally
+            // share the same endpoint/model, so selecting the first one would
+            // silently send the wrong credential.
+            exactMatches = _settings.ProviderProfiles.Where(candidate =>
+                !string.Equals(candidate.Id, editedProfileId, StringComparison.Ordinal) &&
+                ProfileMatchesBaseUrl(candidate, normalizedBaseUrl) &&
+                string.Equals(candidate.Model.Trim(), model.Trim(), StringComparison.Ordinal))
+                .ToList();
+            profile = exactMatches.Count == 1 ? exactMatches[0] : null;
+        }
         if (profile is null)
         {
             var enteredKey = ApiKeyPasswordBox.Password.Trim();
             if (string.IsNullOrWhiteSpace(enteredKey))
             {
                 throw new InvalidOperationException(T(
-                    "更换 Base URL 时必须粘贴新的 API Key。已保存的密钥绝不会发送到新服务。",
-                    "Changing the Base URL requires a new API key. A saved key is never sent to a new service."));
+                    exactMatches.Count > 1
+                        ? "此 Base URL 和模型有多个已保存账号。请先从“已保存账号”中明确选择，或点击“添加账号”并粘贴新 API Key。"
+                        : "更换已保存账号的 Base URL 或模型时，必须粘贴新的 API Key。已保存的密钥绝不会发送到不同线路。",
+                    exactMatches.Count > 1
+                        ? "Multiple saved accounts use this Base URL and model. Select one explicitly under Saved accounts, or choose Add account and paste a new API key."
+                        : "Changing a saved account's Base URL or model requires a new API key. A saved key is never sent to a different route."));
             }
 
             if (enteredKey.Length < 16)
@@ -2573,6 +2633,26 @@ public partial class MainWindow : Window
     private StackPanel CreateProviderProfilePickerContent(ProviderProfile profile)
     {
         var routeName = ResolveProfileRouteName(profile);
+        var sameRouteProfiles = _settings.ProviderProfiles
+            .Where(candidate =>
+                ProfileMatchesBaseUrl(candidate, NormalizeProfileBaseUrl(profile)) &&
+                string.Equals(
+                    candidate.Model.Trim(),
+                    profile.Model.Trim(),
+                    StringComparison.Ordinal))
+            .ToList();
+        if (sameRouteProfiles.Count > 1)
+        {
+            var ordinal = sameRouteProfiles.FindIndex(candidate =>
+                string.Equals(candidate.Id, profile.Id, StringComparison.Ordinal)) + 1;
+            routeName = $"{routeName} · {T("账号", "Account")} {ordinal}";
+        }
+        var isActive = _lastConfigStatus is { Mode: ProviderMode.ThirdParty } status &&
+                       CredentialTargetFactory.IsValid(status.CredentialTarget) &&
+                       string.Equals(
+                           profile.CredentialTarget,
+                           status.CredentialTarget,
+                           StringComparison.Ordinal);
         var model = string.IsNullOrWhiteSpace(profile.Model)
             ? T("未设置模型", "No model")
             : profile.Model.Trim();
@@ -2587,7 +2667,9 @@ public partial class MainWindow : Window
         var panel = new StackPanel { Margin = new Thickness(0, 1, 0, 1) };
         panel.Children.Add(new TextBlock
         {
-            Text = routeName,
+            Text = isActive
+                ? $"{routeName} · {T("当前线路", "Current route")}"
+                : routeName,
             FontWeight = FontWeights.SemiBold,
             TextTrimming = TextTrimming.CharacterEllipsis
         });
@@ -2985,9 +3067,40 @@ public partial class MainWindow : Window
             _settings.ThirdPartyModel);
 
     private string CurrentCompatibilityEndpointFingerprint() =>
-        ConnectionTestService.EndpointFingerprint(
-            _settings.ThirdPartyBaseUrl,
-            _settings.ThirdPartyModel);
+        CompatibilityFingerprint(
+            DraftProviderProfile ?? ActiveProviderProfile,
+            BaseUrlTextBox.Text,
+            ModelComboBox.Text);
+
+    private static string CompatibilityFingerprint(
+        ProviderProfile profile,
+        string? displayedBaseUrl = null,
+        string? displayedModel = null)
+    {
+        var baseUrl = displayedBaseUrl?.Trim();
+        var model = displayedModel?.Trim();
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            baseUrl = profile.BaseUrl;
+        }
+
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            model = profile.Model;
+        }
+
+        // K3 is tested against its upstream Chat Completions contract, but
+        // the persisted capability belongs to the local Responses route that
+        // Codex actually consumes. Keep this identity stable across tests and
+        // switches so a direct SuiXiang model can never reuse a K3 result.
+        if (SettingsStore.IsKimiBaseUrl(baseUrl) &&
+            string.Equals(model, AppPaths.DefaultKimiModel, StringComparison.Ordinal))
+        {
+            baseUrl = AppPaths.KimiRouterBaseUrl;
+        }
+
+        return ConnectionTestService.EndpointFingerprint(baseUrl, model!);
+    }
 
     private string CurrentImageEndpointFingerprint() =>
         ConnectionTestService.EndpointFingerprint(
@@ -3073,11 +3186,14 @@ public partial class MainWindow : Window
         // bridge without first switching through official Codex.
         ModelComboBox.IsEditable = true;
         KimiExperimentalNoticeText.Text = T(
-            "随想 K3 实验线路仅支持 k3：随想 API Key 只按此 Base URL 的凭据槽使用；本机路由器健康检查、模型目录和 loopback Responses 测试必须全部通过。当前不承诺图片、Remote 或 Codex 原生插件能力。",
-            "The SuiXiang K3 experimental route supports only k3: the SuiXiang API key is used only from this Base URL's credential slot; router health, the model catalog, and a loopback Responses test must all pass. Images, Remote, and native Codex plugin capabilities are not promised.");
+            "随想 K3 实验线路仅支持 k3：先检查 WSL 路由器，再测试随想上游 Chat Completions；Codex 实际通过本机 loopback Responses 路由。当前不承诺图片、Remote 或 Codex 原生插件能力。",
+            "The SuiXiang K3 experimental route supports only k3: the WSL router is checked first, then the SuiXiang Chat Completions upstream; Codex uses the local loopback Responses route. Images, Remote, and native Codex plugin capabilities are not promised.");
         SwitchThirdPartyButton.Content = kimi
             ? T("切换到随想 K3", "Switch to SuiXiang K3")
             : T("切换到第三方", "Switch to third-party");
+        TestConnectionButton.Content = kimi
+            ? T("测试随想 K3", "Test SuiXiang K3")
+            : T("测试 Responses 兼容性", "Test Responses compatibility");
     }
 
     private bool IsKimiModelSelection()
@@ -3325,8 +3441,8 @@ public partial class MainWindow : Window
             "添加一个独立的 API Key；输入并保存密钥或成功切换后才会建立账号。",
             "Add an independent API key. The account is created only after the key is saved or a switch succeeds.");
         KimiExperimentalNoticeText.Text = T(
-            "随想 K3 实验线路仅支持 k3：随想 API Key 只按此 Base URL 的凭据槽使用；本机路由器健康检查、模型目录和 loopback Responses 测试必须全部通过。当前不承诺图片、Remote 或 Codex 原生插件能力。",
-            "The SuiXiang K3 experimental route supports only k3: the SuiXiang API key is used only from this Base URL's credential slot; router health, the model catalog, and a loopback Responses test must all pass. Images, Remote, and native Codex plugin capabilities are not promised.");
+            "随想 K3 实验线路仅支持 k3：先检查 WSL 路由器，再测试随想上游 Chat Completions；Codex 实际通过本机 loopback Responses 路由。当前不承诺图片、Remote 或 Codex 原生插件能力。",
+            "The SuiXiang K3 experimental route supports only k3: the WSL router is checked first, then the SuiXiang Chat Completions upstream; Codex uses the local loopback Responses route. Images, Remote, and native Codex plugin capabilities are not promised.");
         KeyStorageDescriptionText.Text = T(
             "密钥保存在 Windows 凭据管理器；不会写进 config.toml、源码或日志。",
             "The key is stored in Windows Credential Manager and is never written to config.toml, source code, or logs.");
@@ -3479,7 +3595,7 @@ public partial class MainWindow : Window
 
     private static Version CurrentApplicationVersion() =>
         GitHubReleaseUpdateService.NormalizeVersion(
-            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 4, 0));
+            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 4, 2));
 
     private Brush ResourceBrush(string key) =>
         (Brush)FindResource(key);

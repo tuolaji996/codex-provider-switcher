@@ -76,15 +76,15 @@ custom providers. **Refresh model list** resolves the credential for the
 currently entered Base URL only, never reusing a key from another profile. A
 missing current model is retained and called out as still requiring a live
 compatibility test. SuiXiang refreshes its list dynamically and every switch
-performs a fresh Responses compatibility test; any SuiXiang failure is fail
-closed, with no write-anyway option. Select `k3` to use the experimental
-bridge; any other listed SuiXiang model uses direct SuiXiang Responses. The
-Providers page also lets you create and select multiple saved key profiles,
+performs a fresh live compatibility test; direct models use SuiXiang Responses,
+while `k3` uses the upstream Chat Completions contract plus the WSL bridge
+health check. Any SuiXiang failure is fail closed, with no write-anyway option.
+The Providers page also lets you create and select multiple saved key profiles,
 including multiple keys for the same SuiXiang Base URL.
 
 ## Interface
 
-Version 1.4.1 uses a compact native Windows workspace:
+Version 1.4.2 uses a compact native Windows workspace:
 
 - **Home:** current route, shared-history health, and quick switching.
 - **Providers:** official OpenAI and third-party endpoint, model, and key
@@ -249,7 +249,7 @@ already included on the target machine. A .NET 8 SDK is needed only to build.
 To create the versioned ZIP and SHA-256 file used by GitHub Releases:
 
 ```powershell
-.\release.ps1 -Version 1.4.1 -DotNet "C:\path\to\dotnet.exe"
+.\release.ps1 -Version 1.4.2 -DotNet "C:\path\to\dotnet.exe"
 ```
 
 The installed files are placed in:
