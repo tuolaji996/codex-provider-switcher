@@ -129,6 +129,8 @@ var modelDiscoveryHandler = new ModelDiscoveryStubHttpMessageHandler(
         { "id": "z-model" },
         { "id": " " },
         { "id": "" },
+        { "id": "k3" },
+        { "id": " K3 " },
         { "id": "a-model" }
       ]
     }
@@ -140,9 +142,13 @@ var discoveredModels = await modelDiscovery.DiscoverAsync(
     modelDiscoveryKey);
 Check(
     discoveredModels.Success &&
-    discoveredModels.Models.SequenceEqual(new[] { "a-model", "z-model" }) &&
+    discoveredModels.Models.SequenceEqual(new[] { "a-model", "K3", "k3", "z-model" }) &&
     discoveredModels.StatusCode == 200,
     "Model discovery did not normalize, deduplicate, and sort model IDs.");
+Check(
+    discoveredModels.Models.Any(model =>
+        string.Equals(model, "k3", StringComparison.Ordinal)),
+    "Model discovery removed a custom provider's valid k3 model.");
 Check(
     modelDiscoveryHandler.RequestUri ==
         new Uri("https://models.example/v1/models") &&
@@ -153,6 +159,16 @@ Check(
 Check(
     !discoveredModels.Summary.Contains(modelDiscoveryKey, StringComparison.Ordinal),
     "Model discovery included the API key in a success summary.");
+
+var suiXiangDiscovery = await new ModelDiscoveryService(
+    new HttpClient(new ModelDiscoveryStubHttpMessageHandler(
+        HttpStatusCode.OK,
+        "{\"data\":[{\"id\":\"k3\"},{\"id\":\"gpt-5.6-sol\"}]}")))
+    .DiscoverAsync(AppPaths.KimiUpstreamBaseUrl, modelDiscoveryKey);
+Check(
+    suiXiangDiscovery.Success &&
+    suiXiangDiscovery.Models.SequenceEqual(new[] { "gpt-5.6-sol" }),
+    "SuiXiang model discovery exposed the retired K3 route.");
 
 Localizer.Use(AppLanguage.English);
 var englishModelDiscovery = await new ModelDiscoveryService(
@@ -166,6 +182,46 @@ Check(
         "Loaded 1 model IDs; compatibility is verified separately.",
     "Model discovery did not use the active English localization.");
 Localizer.Use(AppLanguage.Chinese);
+
+var startupProcessCounts = new Queue<int>(new[] { 0, 1, 1 });
+var startupDelays = new List<TimeSpan>();
+var appServerReady = false;
+var startupProbe = new CodexProcessService(
+    () => startupProcessCounts.Count > 0 ? startupProcessCounts.Dequeue() : 1,
+    _ => true,
+    (delay, _) =>
+    {
+        startupDelays.Add(delay);
+        appServerReady = true;
+        return Task.CompletedTask;
+    },
+    _ => appServerReady,
+    TimeSpan.FromSeconds(2),
+    TimeSpan.FromMilliseconds(25));
+await startupProbe.WaitUntilStartedForTestAsync();
+Check(
+    startupDelays.Contains(TimeSpan.FromMilliseconds(25)),
+    "Codex startup readiness did not wait for the app-server readiness marker.");
+
+var startupTimeoutObserved = false;
+try
+{
+    var startupTimeoutProbe = new CodexProcessService(
+        () => 0,
+        _ => true,
+        (_, _) => Task.CompletedTask,
+        _ => false,
+        TimeSpan.FromTicks(1),
+        TimeSpan.FromTicks(1));
+    await startupTimeoutProbe.WaitUntilStartedForTestAsync();
+}
+catch (InvalidOperationException exception)
+{
+    startupTimeoutObserved = exception.Message.Contains(
+        "did not start",
+        StringComparison.Ordinal);
+}
+Check(startupTimeoutObserved, "Codex startup timeout did not fail closed.");
 
 foreach (var malformedModelsBody in new[]
          {
@@ -330,18 +386,76 @@ var kimiChatProbeHandler = new ProtocolProbeHttpMessageHandler(
     "application/json");
 var kimiChatProbe = new ConnectionTestService(
     new HttpClient(kimiChatProbeHandler));
-var kimiChatResult = await kimiChatProbe.TestChatCompletionsApiAsync(
-    AppPaths.KimiUpstreamBaseUrl,
-    AppPaths.DefaultKimiModel,
-    "k3-probe-key");
+var retiredKimiProbeRejected = false;
+try
+{
+    _ = await kimiChatProbe.TestChatCompletionsApiAsync(
+        AppPaths.KimiUpstreamBaseUrl,
+        AppPaths.DefaultKimiModel,
+        "k3-probe-key");
+}
+catch (InvalidOperationException exception)
+{
+    retiredKimiProbeRejected =
+        exception.Message.Contains("retired", StringComparison.OrdinalIgnoreCase);
+}
 Check(
-    kimiChatResult.Success &&
-    kimiChatProbeHandler.Method == HttpMethod.Post &&
-    kimiChatProbeHandler.RequestUri?.AbsolutePath == "/v1/chat/completions" &&
-    kimiChatProbeHandler.AuthorizationScheme == "Bearer" &&
-    kimiChatProbeHandler.AuthorizationParameter == "k3-probe-key" &&
-    kimiChatProbeHandler.RequestBody?.Contains("\"model\":\"k3\"", StringComparison.Ordinal) == true,
-    "The K3 compatibility probe did not use the upstream Chat Completions contract.");
+    retiredKimiProbeRejected && kimiChatProbeHandler.RequestUri is null,
+    "A retired K3 compatibility probe reached the upstream network.");
+
+var retiredDirectResponsesRejected = false;
+try
+{
+    _ = await kimiChatProbe.TestResponsesApiAsync(
+        AppPaths.KimiUpstreamBaseUrl,
+        AppPaths.DefaultKimiModel,
+        "k3-probe-key");
+}
+catch (InvalidOperationException exception)
+{
+    retiredDirectResponsesRejected =
+        exception.Message.Contains("retired", StringComparison.OrdinalIgnoreCase);
+}
+Check(
+    retiredDirectResponsesRejected && kimiChatProbeHandler.RequestUri is null,
+    "A direct Responses request silently accepted the retired k3 model.");
+
+var retiredToolProbeRejected = false;
+try
+{
+    _ = await kimiChatProbe.TestFunctionCallingAsync(
+        AppPaths.KimiUpstreamBaseUrl,
+        AppPaths.DefaultKimiModel,
+        "k3-probe-key");
+}
+catch (InvalidOperationException exception)
+{
+    retiredToolProbeRejected =
+        exception.Message.Contains("retired", StringComparison.OrdinalIgnoreCase);
+}
+Check(
+    retiredToolProbeRejected && kimiChatProbeHandler.RequestUri is null,
+    "A tool-call test reached the retired k3 route.");
+
+var customK3ResponsesHandler = new ProtocolProbeHttpMessageHandler(
+    """
+    data: {"type":"response.output_text.delta","delta":"OK"}
+
+    data: {"type":"response.completed","response":{"id":"resp-custom-k3","status":"completed"}}
+
+    data: [DONE]
+
+    """,
+    "text/event-stream");
+var customK3ResponsesResult = await new ConnectionTestService(
+    new HttpClient(customK3ResponsesHandler)).TestResponsesApiAsync(
+        "https://provider.example/v1",
+        "k3",
+        "custom-k3-key");
+Check(
+    customK3ResponsesResult.Success &&
+    customK3ResponsesHandler.RequestUri?.AbsolutePath == "/v1/responses",
+    "A custom provider's valid k3 Responses route was rejected.");
 
 var directResponsesProbeHandler = new ProtocolProbeHttpMessageHandler(
     """
@@ -1199,40 +1313,126 @@ finally
     }
 }
 
-var kimiConfig = service.BuildKimiConfig(
-    original,
-    AppPaths.DefaultKimiModel,
-    @"C:\Users\Test\AppData\Local\Programs\CodexProviderSwitcher\CodexProviderToken.exe",
-    profileCredentialTarget);
-var kimiStatus = service.ParseStatus(kimiConfig);
-Check(
-    kimiStatus.Mode == ProviderMode.ThirdParty &&
-    kimiStatus.BaseUrl == AppPaths.KimiRouterBaseUrl &&
-    kimiStatus.Model == AppPaths.DefaultKimiModel &&
-    kimiStatus.ReviewModel == AppPaths.DefaultKimiModel &&
-    kimiStatus.ModelCatalogJson == AppPaths.KimiModelCatalogFileName &&
-    kimiStatus.CredentialTarget == profileCredentialTarget &&
-    kimiConfig.Contains(
-        $"model_catalog_json = \"{AppPaths.KimiModelCatalogFileName}\"",
-        StringComparison.Ordinal) &&
-    kimiConfig.Contains(
-        "command = \"/bin/sh\"",
-        StringComparison.Ordinal) &&
-    kimiConfig.Contains(
-        "/CodexProviderSwitcher/codex-provider-kimi-launcher.sh",
-        StringComparison.Ordinal) &&
-    kimiConfig.Contains(
-        $"refresh_interval_ms = {AppPaths.KimiAuthRefreshIntervalMilliseconds}",
-        StringComparison.Ordinal) &&
-    !kimiConfig.Contains("--ensure-kimi-router", StringComparison.Ordinal),
-    "Kimi config generation did not route through the managed loopback catalog.");
-Check(
-    service.BuildKimiConfig(
-        kimiConfig,
+var retiredKimiConfigRejected = false;
+try
+{
+    _ = service.BuildKimiConfig(
+        original,
         AppPaths.DefaultKimiModel,
         @"C:\Users\Test\AppData\Local\Programs\CodexProviderSwitcher\CodexProviderToken.exe",
-        profileCredentialTarget) == kimiConfig,
-    "Kimi config generation was not idempotent.");
+        profileCredentialTarget);
+}
+catch (InvalidOperationException)
+{
+    retiredKimiConfigRejected = true;
+}
+Check(
+    retiredKimiConfigRejected,
+    "Retired K3 config generation was not rejected.");
+
+var retiredDirectConfigRejected = false;
+try
+{
+    _ = service.BuildThirdPartyConfig(
+        original,
+        AppPaths.DefaultKimiModel,
+        AppPaths.KimiUpstreamBaseUrl,
+        @"C:\Users\Test\AppData\Local\Programs\CodexProviderSwitcher\CodexProviderToken.exe",
+        profileCredentialTarget);
+}
+catch (InvalidOperationException)
+{
+    retiredDirectConfigRejected = true;
+}
+Check(
+    retiredDirectConfigRejected,
+    "Direct third-party config generation silently accepted k3.");
+
+var customK3Config = service.BuildThirdPartyConfig(
+    original,
+    "k3",
+    "https://provider.example/v1",
+    @"C:\Users\Test\AppData\Local\Programs\CodexProviderSwitcher\CodexProviderToken.exe",
+    profileCredentialTarget);
+var customK3Status = service.ParseStatus(customK3Config);
+Check(
+    customK3Status.Mode == ProviderMode.ThirdParty &&
+    customK3Status.Model == "k3" &&
+    customK3Status.BaseUrl == "https://provider.example/v1" &&
+    customK3Status.ModelCatalogJson is null,
+    "A custom provider's valid k3 config was rejected or rewritten as Kimi.");
+
+var customK3WorkflowRoot = Path.Combine(
+    Path.GetTempPath(),
+    $"codex-provider-switcher-custom-k3-workflow-{Guid.NewGuid():N}");
+Directory.CreateDirectory(customK3WorkflowRoot);
+var customK3WorkflowConfig = Path.Combine(customK3WorkflowRoot, "config.toml");
+File.WriteAllText(customK3WorkflowConfig, original);
+string? customK3WorkflowBackup = null;
+try
+{
+    var customK3Switch = new ProviderSwitchWorkflowService(service).SwitchToThirdParty(
+        new ThirdPartySwitchRequest(
+            "k3",
+            "https://provider.example/v1",
+            @"C:\Users\Test\AppData\Local\Programs\CodexProviderSwitcher\CodexProviderToken.exe",
+            profileCredentialTarget),
+        customK3WorkflowConfig);
+    customK3WorkflowBackup = customK3Switch.BackupFolder;
+    Check(
+        customK3Switch.VerifiedStatus.Model == "k3" &&
+        customK3Switch.VerifiedStatus.BaseUrl == "https://provider.example/v1",
+        "A custom provider's valid k3 workflow was rejected.");
+}
+finally
+{
+    if (customK3WorkflowBackup is not null &&
+        Directory.Exists(customK3WorkflowBackup))
+    {
+        Directory.Delete(customK3WorkflowBackup, true);
+    }
+
+    if (Directory.Exists(customK3WorkflowRoot))
+    {
+        Directory.Delete(customK3WorkflowRoot, true);
+    }
+}
+
+var legacyKimiConfig =
+    $"""
+    model = "k3"
+    review_model = "k3"
+    model_provider = "OpenAI"
+    model_catalog_json = "{AppPaths.KimiModelCatalogFileName}"
+
+    [model_providers.OpenAI]
+    name = "OpenAI"
+    base_url = "{AppPaths.KimiRouterBaseUrl}"
+    wire_api = "responses"
+
+    [model_providers.OpenAI.auth]
+    command = "/bin/sh"
+    args = ["/mnt/c/legacy-launcher.sh", "--credential-target", "{profileCredentialTarget}"]
+    """;
+
+var directSolFromKimiConfig = service.BuildThirdPartyConfig(
+    legacyKimiConfig,
+    "gpt-5.6-sol",
+    AppPaths.KimiUpstreamBaseUrl,
+    @"C:\Users\Test\AppData\Local\Programs\CodexProviderSwitcher\CodexProviderToken.exe",
+    profileCredentialTarget);
+var directSolFromKimiStatus = service.ParseStatus(directSolFromKimiConfig);
+Check(
+    directSolFromKimiStatus.Mode == ProviderMode.ThirdParty &&
+    directSolFromKimiStatus.Model == "gpt-5.6-sol" &&
+    directSolFromKimiStatus.ReviewModel == "gpt-5.6-sol" &&
+    directSolFromKimiStatus.BaseUrl == AppPaths.KimiUpstreamBaseUrl &&
+    directSolFromKimiStatus.ModelCatalogJson is null &&
+    !directSolFromKimiConfig.Contains(AppPaths.KimiRouterBaseUrl, StringComparison.Ordinal) &&
+    !directSolFromKimiConfig.Contains(
+        $"model_catalog_json = \"{AppPaths.KimiModelCatalogFileName}\"",
+        StringComparison.Ordinal),
+    "A direct Sol route retained the K3 loopback router or model catalog.");
 
 var userCatalogConfig =
     "model_catalog_json = \"user-owned-catalog.json\"\n" + original;
@@ -1269,7 +1469,7 @@ catch (InvalidOperationException)
 }
 Check(kimiCatalogConflictRejected, "Kimi config overwrote a user-owned model catalog.");
 Check(
-    !service.BuildOfficialConfig(kimiConfig, "gpt-5.6-sol", "gpt-5.5")
+    !service.BuildOfficialConfig(legacyKimiConfig, "gpt-5.6-sol", "gpt-5.5")
         .Contains(
             $"model_catalog_json = \"{AppPaths.KimiModelCatalogFileName}\"",
             StringComparison.Ordinal),
@@ -1282,31 +1482,44 @@ Directory.CreateDirectory(kimiWorkflowRoot);
 var kimiWorkflowConfigPath = Path.Combine(kimiWorkflowRoot, "config.toml");
 File.WriteAllText(kimiWorkflowConfigPath, original);
 File.WriteAllText(Path.Combine(kimiWorkflowRoot, "models_cache.json"), kimiCacheJson);
-string? kimiWorkflowBackup = null;
 try
 {
     var kimiWorkflow = new ProviderSwitchWorkflowService(service);
-    var kimiSwitch = kimiWorkflow.SwitchToKimi(
-        new KimiSwitchRequest(
-            AppPaths.DefaultKimiModel,
-            @"C:\Users\Test\AppData\Local\Programs\CodexProviderSwitcher\CodexProviderToken.exe",
-            profileCredentialTarget),
-        kimiWorkflowConfigPath,
-        kimiWorkflowRoot);
-    kimiWorkflowBackup = kimiSwitch.BackupFolder;
+    var beforeRetiredSwitch = File.ReadAllText(kimiWorkflowConfigPath);
+    var retiredWorkflowRejected = false;
+    try
+    {
+        _ = kimiWorkflow.SwitchToKimi(
+            new KimiSwitchRequest(
+                AppPaths.DefaultKimiModel,
+                @"C:\Users\Test\AppData\Local\Programs\CodexProviderSwitcher\CodexProviderToken.exe",
+                profileCredentialTarget),
+            kimiWorkflowConfigPath,
+            kimiWorkflowRoot);
+    }
+    catch (InvalidOperationException)
+    {
+        retiredWorkflowRejected = true;
+    }
     Check(
-        kimiSwitch.VerifiedStatus.ModelCatalogJson ==
-            AppPaths.KimiModelCatalogFileName &&
-        service.ParseStatus(File.ReadAllText(kimiWorkflowConfigPath)).BaseUrl ==
-            AppPaths.KimiRouterBaseUrl,
-        "Kimi workflow did not verify the routed config after its atomic write.");
+        retiredWorkflowRejected &&
+        File.ReadAllText(kimiWorkflowConfigPath) == beforeRetiredSwitch &&
+        !File.Exists(Path.Combine(
+            kimiWorkflowRoot,
+            AppPaths.KimiModelCatalogFileName)),
+        "A retired K3 workflow changed config or created a managed catalog.");
 
     File.WriteAllText(
         kimiWorkflowConfigPath,
         userCatalogConfig);
     var beforeConflict = File.ReadAllText(kimiWorkflowConfigPath);
-    var beforeConflictCatalog = File.ReadAllBytes(
-        Path.Combine(kimiWorkflowRoot, AppPaths.KimiModelCatalogFileName));
+    var beforeConflictCatalogPath = Path.Combine(
+        kimiWorkflowRoot,
+        AppPaths.KimiModelCatalogFileName);
+    File.WriteAllText(
+        beforeConflictCatalogPath,
+        "{\"models\":[{\"slug\":\"existing\"}]}");
+    var beforeConflictCatalog = File.ReadAllBytes(beforeConflictCatalogPath);
     var workflowConflictRejected = false;
     try
     {
@@ -1332,10 +1545,6 @@ try
 }
 finally
 {
-    if (kimiWorkflowBackup is not null && Directory.Exists(kimiWorkflowBackup))
-    {
-        Directory.Delete(kimiWorkflowBackup, true);
-    }
     if (Directory.Exists(kimiWorkflowRoot))
     {
         Directory.Delete(kimiWorkflowRoot, true);
@@ -1364,8 +1573,9 @@ try
         ActiveProviderProfileId = kimiProfile.Id
     };
     File.WriteAllText(kimiSettingsPath, JsonSerializer.Serialize(kimiSettings));
+    var legacyKimiStatus = service.ParseStatus(legacyKimiConfig);
     var kimiLoaded = new SettingsStore(kimiSettingsPath).Load(
-        kimiStatus);
+        legacyKimiStatus);
     Check(
         kimiLoaded.ActiveProviderProfile?.Kind == ProviderKinds.Kimi &&
         kimiLoaded.ActiveProviderProfile.BaseUrl == AppPaths.KimiUpstreamBaseUrl &&

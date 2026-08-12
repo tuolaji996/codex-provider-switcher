@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -20,10 +21,18 @@ public static class KimiResponsesTranslator
 
     public static JsonObject BuildChatCompletionsRequest(JsonElement responsesRequest)
     {
+        return BuildChatCompletionsRequest(responsesRequest, out _);
+    }
+
+    internal static JsonObject BuildChatCompletionsRequest(
+        JsonElement responsesRequest,
+        out KimiToolNameMap toolNameMap)
+    {
+        toolNameMap = KimiToolNameMap.Create(responsesRequest);
         var body = new JsonObject
         {
             ["model"] = ReadString(responsesRequest, "model") ?? KimiRouterOptions.DefaultModelName,
-            ["messages"] = BuildMessages(responsesRequest)
+            ["messages"] = BuildMessages(responsesRequest, toolNameMap)
         };
 
         var stream = ReadBoolean(responsesRequest, "stream");
@@ -54,7 +63,7 @@ public static class KimiResponsesTranslator
         CopyProperty(responsesRequest, body, "response_format");
         if (TryGetProperty(responsesRequest, "tool_choice", out var toolChoice))
         {
-            body["tool_choice"] = BuildChatToolChoice(toolChoice);
+            body["tool_choice"] = BuildChatToolChoice(toolChoice, toolNameMap);
         }
         CopyProperty(responsesRequest, body, "parallel_tool_calls");
         var reasoningEffort = ReadReasoningEffort(responsesRequest);
@@ -74,7 +83,7 @@ public static class KimiResponsesTranslator
 
         if (TryGetProperty(responsesRequest, "tools", out var tools) && tools.ValueKind == JsonValueKind.Array)
         {
-            body["tools"] = BuildTools(tools);
+            body["tools"] = BuildTools(tools, toolNameMap);
         }
 
         return body;
@@ -92,8 +101,24 @@ public static class KimiResponsesTranslator
         string? responseId = null,
         IEnumerable<string>? customToolNames = null)
     {
+        return TranslateNonStreaming(
+            chatCompletionsJson,
+            requestedModel,
+            responseId,
+            customToolNames,
+            null);
+    }
+
+    internal static string TranslateNonStreaming(
+        string chatCompletionsJson,
+        string requestedModel,
+        string? responseId,
+        IEnumerable<string>? customToolNames,
+        KimiToolNameMap? toolNameMap = null)
+    {
         using var document = JsonDocument.Parse(chatCompletionsJson);
-        return BuildResponse(document.RootElement, requestedModel, responseId, customToolNames).ToJsonString(JsonOptions);
+        return BuildResponse(document.RootElement, requestedModel, responseId, customToolNames, toolNameMap)
+            .ToJsonString(JsonOptions);
     }
 
     public static JsonObject BuildResponse(
@@ -101,6 +126,21 @@ public static class KimiResponsesTranslator
         string requestedModel,
         string? responseId = null,
         IEnumerable<string>? customToolNames = null)
+    {
+        return BuildResponse(
+            chatCompletion,
+            requestedModel,
+            responseId,
+            customToolNames,
+            null);
+    }
+
+    internal static JsonObject BuildResponse(
+        JsonElement chatCompletion,
+        string requestedModel,
+        string? responseId,
+        IEnumerable<string>? customToolNames,
+        KimiToolNameMap? toolNameMap = null)
     {
         var customNames = customToolNames is null
             ? new HashSet<string>(StringComparer.Ordinal)
@@ -137,7 +177,12 @@ public static class KimiResponsesTranslator
             {
                 foreach (var toolCall in toolCalls.EnumerateArray())
                 {
-                    output.Add(BuildCompletedFunctionItem(toolCall, id, output.Count, customNames));
+                    output.Add(BuildCompletedFunctionItem(
+                        toolCall,
+                        id,
+                        output.Count,
+                        customNames,
+                        toolNameMap));
                 }
             }
         }
@@ -198,11 +243,27 @@ public static class KimiResponsesTranslator
         string? responseId = null,
         IEnumerable<string>? customToolNames = null)
     {
+        return TranslateStreaming(
+            chatCompletionsSse,
+            requestedModel,
+            responseId,
+            customToolNames,
+            null);
+    }
+
+    internal static string TranslateStreaming(
+        string chatCompletionsSse,
+        string requestedModel,
+        string? responseId,
+        IEnumerable<string>? customToolNames,
+        KimiToolNameMap? toolNameMap = null)
+    {
         var builder = new StringBuilder();
         var state = new KimiResponsesStreamState(
             requestedModel,
             responseId,
             customToolNames,
+            toolNameMap,
             item => builder.Append(item.ToSse()));
         state.EmitInitialEvents();
         try
@@ -211,6 +272,16 @@ public static class KimiResponsesTranslator
             {
                 state.ProcessChunk(chunk);
             }
+        }
+        catch (UnknownKimiMappedToolNameException)
+        {
+            state.Fail("upstream_protocol_error", "The Kimi upstream returned an unknown tool name.");
+            return builder.ToString();
+        }
+        catch (InvalidDataException)
+        {
+            state.Fail("upstream_protocol_error", "The Kimi upstream returned invalid streaming data.");
+            return builder.ToString();
         }
         catch (JsonException)
         {
@@ -349,7 +420,9 @@ public static class KimiResponsesTranslator
     /// custom-tool forms to Chat's <c>{type:function,function:{name}}</c>
     /// shape while preserving the simple auto/none/required values.
     /// </summary>
-    internal static JsonNode? BuildChatToolChoice(JsonElement toolChoice)
+    internal static JsonNode? BuildChatToolChoice(
+        JsonElement toolChoice,
+        KimiToolNameMap? toolNameMap = null)
     {
         if (toolChoice.ValueKind != JsonValueKind.Object)
         {
@@ -376,7 +449,11 @@ public static class KimiResponsesTranslator
             ["type"] = "function",
             ["function"] = new JsonObject
             {
-                ["name"] = name
+                ["name"] = toolNameMap is null
+                    ? name
+                    : toolNameMap.TryGetUpstream(name, out var mappedName)
+                        ? mappedName
+                        : name
             }
         };
     }
@@ -499,7 +576,7 @@ public static class KimiResponsesTranslator
         return result;
     }
 
-    private static JsonArray BuildMessages(JsonElement request)
+    private static JsonArray BuildMessages(JsonElement request, KimiToolNameMap toolNameMap)
     {
         var messages = new JsonArray();
         var instructions = ReadString(request, "instructions");
@@ -525,7 +602,7 @@ public static class KimiResponsesTranslator
 
         if (input.ValueKind == JsonValueKind.Object)
         {
-            AddInputItem(messages, input);
+            AddInputItem(messages, input, toolNameMap);
             return messages;
         }
 
@@ -541,7 +618,7 @@ public static class KimiResponsesTranslator
             if (IsAssistantOutputItem(item))
             {
                 FlushPendingUserText(messages, pendingText);
-                AddAssistantOutputItem(ref pendingAssistant, item);
+                AddAssistantOutputItem(ref pendingAssistant, item, toolNameMap);
                 continue;
             }
 
@@ -564,7 +641,7 @@ public static class KimiResponsesTranslator
 
             FlushPendingUserText(messages, pendingText);
             FlushPendingAssistant(messages, ref pendingAssistant);
-            AddInputItem(messages, item);
+            AddInputItem(messages, item, toolNameMap);
         }
 
         FlushPendingUserText(messages, pendingText);
@@ -572,7 +649,10 @@ public static class KimiResponsesTranslator
         return messages;
     }
 
-    private static void AddInputItem(JsonArray messages, JsonElement item)
+    private static void AddInputItem(
+        JsonArray messages,
+        JsonElement item,
+        KimiToolNameMap toolNameMap)
     {
         if (item.ValueKind != JsonValueKind.Object)
         {
@@ -596,7 +676,7 @@ public static class KimiResponsesTranslator
         if (IsAssistantOutputItem(item))
         {
             JsonObject? pendingAssistant = null;
-            AddAssistantOutputItem(ref pendingAssistant, item);
+            AddAssistantOutputItem(ref pendingAssistant, item, toolNameMap);
             FlushPendingAssistant(messages, ref pendingAssistant);
             return;
         }
@@ -616,7 +696,7 @@ public static class KimiResponsesTranslator
         if (TryGetProperty(item, "tool_calls", out var existingCalls) &&
             existingCalls.ValueKind == JsonValueKind.Array)
         {
-            message["tool_calls"] = CloneNode(existingCalls);
+            message["tool_calls"] = MapExistingToolCalls(existingCalls, toolNameMap);
         }
 
         if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase))
@@ -641,7 +721,10 @@ public static class KimiResponsesTranslator
             string.Equals(ReadString(item, "role"), "assistant", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void AddAssistantOutputItem(ref JsonObject? pendingAssistant, JsonElement item)
+    private static void AddAssistantOutputItem(
+        ref JsonObject? pendingAssistant,
+        JsonElement item,
+        KimiToolNameMap toolNameMap)
     {
         pendingAssistant ??= new JsonObject
         {
@@ -675,7 +758,7 @@ public static class KimiResponsesTranslator
                 ["type"] = "function",
                 ["function"] = new JsonObject
                 {
-                    ["name"] = ReadString(item, "name") ?? string.Empty,
+                    ["name"] = toolNameMap.ToUpstream(ReadString(item, "name") ?? string.Empty),
                     ["arguments"] = isCustomCall ? WrapCustomInput(callArguments) : callArguments
                 }
             };
@@ -713,7 +796,7 @@ public static class KimiResponsesTranslator
 
             foreach (var existingCall in existingCalls.EnumerateArray())
             {
-                calls.Add(CloneNode(existingCall));
+                calls.Add(MapExistingToolCall(existingCall, toolNameMap));
             }
         }
     }
@@ -727,6 +810,44 @@ public static class KimiResponsesTranslator
 
         messages.Add(pendingAssistant);
         pendingAssistant = null;
+    }
+
+    private static JsonArray MapExistingToolCalls(
+        JsonElement toolCalls,
+        KimiToolNameMap toolNameMap)
+    {
+        var result = new JsonArray();
+        foreach (var toolCall in toolCalls.EnumerateArray())
+        {
+            result.Add(MapExistingToolCall(toolCall, toolNameMap));
+        }
+
+        return result;
+    }
+
+    private static JsonNode? MapExistingToolCall(
+        JsonElement toolCall,
+        KimiToolNameMap toolNameMap)
+    {
+        var mapped = CloneNode(toolCall);
+        if (mapped is not JsonObject mappedObject)
+        {
+            return mapped;
+        }
+
+        if (mappedObject["function"] is JsonObject function &&
+            function["name"] is JsonValue nameValue &&
+            nameValue.TryGetValue<string>(out var name))
+        {
+            function["name"] = toolNameMap.ToUpstream(name);
+        }
+        else if (mappedObject["name"] is JsonValue directNameValue &&
+                 directNameValue.TryGetValue<string>(out var directName))
+        {
+            mappedObject["name"] = toolNameMap.ToUpstream(directName);
+        }
+
+        return mappedObject;
     }
 
     private static string ExtractReasoningText(JsonElement item)
@@ -753,7 +874,7 @@ public static class KimiResponsesTranslator
             : null;
     }
 
-    private static JsonArray BuildTools(JsonElement tools)
+    private static JsonArray BuildTools(JsonElement tools, KimiToolNameMap toolNameMap)
     {
         var result = new JsonArray();
         foreach (var tool in tools.EnumerateArray())
@@ -796,7 +917,7 @@ public static class KimiResponsesTranslator
                 ["type"] = "function",
                 ["function"] = new JsonObject
                 {
-                    ["name"] = ReadString(function, "name") ?? string.Empty,
+                    ["name"] = toolNameMap.ToUpstream(ReadString(function, "name") ?? string.Empty),
                     ["description"] = description,
                     ["parameters"] = functionParameters ?? new JsonObject()
                 }
@@ -873,19 +994,22 @@ public static class KimiResponsesTranslator
         JsonElement toolCall,
         string responseId,
         int index,
-        ISet<string> customToolNames)
+        ISet<string> customToolNames,
+        KimiToolNameMap? toolNameMap)
     {
         var function = ReadProperty(toolCall, "function");
         var id = ReadString(toolCall, "id") ?? responseId + "_call_" + index.ToString(CultureInfo.InvariantCulture);
         var arguments = ReadString(function, "arguments") ?? ReadArguments(toolCall, "arguments");
-        var isCustom = customToolNames.Contains(ReadString(function, "name") ?? ReadString(toolCall, "name") ?? string.Empty);
+        var upstreamName = ReadString(function, "name") ?? ReadString(toolCall, "name") ?? string.Empty;
+        var originalName = toolNameMap?.ToOriginal(upstreamName) ?? upstreamName;
+        var isCustom = customToolNames.Contains(originalName);
         return new JsonObject
         {
             ["id"] = responseId + "_fc_" + index.ToString(CultureInfo.InvariantCulture),
             ["type"] = isCustom ? "custom_tool_call" : "function_call",
             ["status"] = "completed",
             ["call_id"] = id,
-            ["name"] = ReadString(function, "name") ?? ReadString(toolCall, "name") ?? string.Empty,
+            ["name"] = originalName,
             [isCustom ? "input" : "arguments"] = isCustom
                 ? RestoreCustomInput(arguments)
                 : arguments
@@ -1122,6 +1246,198 @@ public sealed record KimiResponsesSseEvent(string EventType, JsonObject Data)
     }
 }
 
+internal sealed class KimiToolNameMap
+{
+    private const int MaxNameLength = 64;
+    private const int HashLength = 12;
+    private readonly Dictionary<string, string> _upstreamByOriginal = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _originalByUpstream = new(StringComparer.Ordinal);
+
+    private KimiToolNameMap()
+    {
+    }
+
+    public static KimiToolNameMap Create(JsonElement request)
+    {
+        var result = new KimiToolNameMap();
+        if (!TryReadTools(request, out var tools))
+        {
+            return result;
+        }
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var tool in tools.EnumerateArray())
+        {
+            if (tool.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var type = tool.TryGetProperty("type", out var typeNode) &&
+                typeNode.ValueKind == JsonValueKind.String
+                    ? typeNode.GetString() ?? "function"
+                    : "function";
+            if (!string.Equals(type, "function", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(type, "custom", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var function = tool.TryGetProperty("function", out var nested) &&
+                nested.ValueKind == JsonValueKind.Object
+                    ? nested
+                    : tool;
+            if (function.TryGetProperty("name", out var nameNode) &&
+                nameNode.ValueKind == JsonValueKind.String &&
+                nameNode.GetString() is { Length: > 0 } name)
+            {
+                names.Add(name);
+            }
+        }
+
+        // Reserve directly compatible names first. This makes a collision
+        // between a valid Codex name and a normalized name deterministic.
+        foreach (var name in names
+                     .Where(IsUpstreamCompatible)
+                     .OrderBy(name => name, StringComparer.Ordinal))
+        {
+            result.Add(name);
+        }
+
+        foreach (var name in names
+                     .Where(name => !IsUpstreamCompatible(name))
+                     .OrderBy(name => name, StringComparer.Ordinal))
+        {
+            result.Add(name);
+        }
+
+        return result;
+    }
+
+    // Responses history can mention a previously declared tool without
+    // repeating the full tools array. Keep the mapping extensible on the
+    // request side, but never accept an unmapped upstream tool name.
+    public string ToUpstream(string originalName)
+    {
+        if (_upstreamByOriginal.TryGetValue(originalName, out var mapped))
+        {
+            return mapped;
+        }
+
+        Add(originalName);
+        return _upstreamByOriginal[originalName];
+    }
+
+    public string ToOriginal(string upstreamName)
+    {
+        if (_originalByUpstream.TryGetValue(upstreamName, out var mapped))
+        {
+            return mapped;
+        }
+
+        throw new UnknownKimiMappedToolNameException();
+    }
+
+    internal bool TryGetUpstream(string originalName, out string upstreamName) =>
+        _upstreamByOriginal.TryGetValue(originalName, out upstreamName!);
+
+    private void Add(string originalName)
+    {
+        if (_upstreamByOriginal.ContainsKey(originalName))
+        {
+            return;
+        }
+
+        var normalized = Normalize(originalName);
+        var candidate = normalized;
+        if (!IsUpstreamCompatible(originalName) || _originalByUpstream.ContainsKey(candidate))
+        {
+            candidate = BuildHashedCandidate(normalized, originalName, 0);
+            var suffixIndex = 1;
+            while (_originalByUpstream.ContainsKey(candidate))
+            {
+                candidate = BuildHashedCandidate(normalized, originalName, suffixIndex++);
+            }
+        }
+
+        _upstreamByOriginal[originalName] = candidate;
+        _originalByUpstream[candidate] = originalName;
+    }
+
+    private static string Normalize(string name)
+    {
+        var builder = new StringBuilder(Math.Min(name.Length, MaxNameLength));
+        foreach (var character in name)
+        {
+            var mapped = IsAllowed(character) ? character : '_';
+            if (builder.Length == 0 && !IsAsciiLetter(mapped))
+            {
+                builder.Append('t');
+                if (builder.Length < MaxNameLength)
+                {
+                    builder.Append('_');
+                }
+            }
+
+            if (builder.Length < MaxNameLength)
+            {
+                builder.Append(mapped);
+            }
+        }
+
+        return builder.Length == 0 ? "tool" : builder.ToString();
+    }
+
+    private static string BuildHashedCandidate(string normalized, string originalName, int suffixIndex)
+    {
+        var hashInput = suffixIndex == 0
+            ? originalName
+            : originalName + "\0" + suffixIndex.ToString(CultureInfo.InvariantCulture);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(hashInput)))
+            .ToLowerInvariant()[..HashLength];
+        var prefixLength = MaxNameLength - HashLength - 2;
+        var prefix = normalized[..Math.Min(normalized.Length, prefixLength)];
+        if (prefix.Length == 0)
+        {
+            prefix = "tool";
+        }
+
+        return prefix + "__" + hash;
+    }
+
+    private static bool IsUpstreamCompatible(string name) =>
+        name.Length is > 0 and <= MaxNameLength &&
+        IsAsciiLetter(name[0]) &&
+        name.All(IsAllowed);
+
+    private static bool IsAllowed(char value) =>
+        IsAsciiLetter(value) || value is >= '0' and <= '9' || value is '_' or '-';
+
+    private static bool IsAsciiLetter(char value) =>
+        value is >= 'a' and <= 'z' || value is >= 'A' and <= 'Z';
+
+    private static bool TryReadTools(JsonElement request, out JsonElement tools)
+    {
+        if (request.ValueKind == JsonValueKind.Object &&
+            request.TryGetProperty("tools", out tools) &&
+            tools.ValueKind == JsonValueKind.Array)
+        {
+            return true;
+        }
+
+        tools = default;
+        return false;
+    }
+}
+
+internal sealed class UnknownKimiMappedToolNameException : Exception
+{
+    public UnknownKimiMappedToolNameException()
+        : base("The Kimi upstream returned an unknown tool name.")
+    {
+    }
+}
+
 internal sealed class KimiResponsesStreamState
 {
     private readonly Action<KimiResponsesSseEvent> _emit;
@@ -1129,6 +1445,7 @@ internal sealed class KimiResponsesStreamState
     private readonly List<StreamOutputItem> _items = new();
     private readonly Dictionary<int, StreamFunctionItem> _functions = new();
     private readonly ISet<string> _customToolNames;
+    private readonly KimiToolNameMap? _toolNameMap;
     private readonly string _id;
     private readonly string _model;
     private readonly long _createdAt;
@@ -1143,12 +1460,14 @@ internal sealed class KimiResponsesStreamState
         string requestedModel,
         string? responseId,
         IEnumerable<string>? customToolNames,
+        KimiToolNameMap? toolNameMap,
         Action<KimiResponsesSseEvent> emit)
     {
         _emit = emit;
         _customToolNames = customToolNames is null
             ? new HashSet<string>(StringComparer.Ordinal)
             : new HashSet<string>(customToolNames, StringComparer.Ordinal);
+        _toolNameMap = toolNameMap;
         _id = KimiResponsesTranslator.NormalizeResponseId(responseId);
         _model = string.IsNullOrWhiteSpace(requestedModel) ? KimiRouterOptions.DefaultModelName : requestedModel.Trim();
         _createdAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -1179,7 +1498,7 @@ internal sealed class KimiResponsesStreamState
                     ["type"] = "function",
                     ["function"] = new JsonObject
                     {
-                        ["name"] = function.Item["name"]?.DeepClone(),
+                        ["name"] = function.UpstreamName,
                         ["arguments"] = function.Arguments.ToString()
                     }
                 });
@@ -1526,7 +1845,10 @@ internal sealed class KimiResponsesStreamState
         {
             var outputIndex = NextOutputIndex();
             var functionObject = KimiResponsesTranslator.ReadPropertyForStream(toolCall, "function");
-            var functionName = KimiResponsesTranslator.ReadStringForStream(functionObject, "name") ?? string.Empty;
+            var upstreamFunctionName = KimiResponsesTranslator.ReadStringForStream(functionObject, "name") ?? string.Empty;
+            var functionName = string.IsNullOrWhiteSpace(upstreamFunctionName)
+                ? string.Empty
+                : _toolNameMap?.ToOriginal(upstreamFunctionName) ?? upstreamFunctionName;
             var callId = KimiResponsesTranslator.ReadStringForStream(toolCall, "id") ??
                 _id + "_call_" + upstreamIndex.ToString(CultureInfo.InvariantCulture);
             var itemId = _id + "_fc_" + upstreamIndex.ToString(CultureInfo.InvariantCulture);
@@ -1547,7 +1869,14 @@ internal sealed class KimiResponsesStreamState
                 item["input"] = string.Empty;
             }
 
-            function = new StreamFunctionItem(upstreamIndex, outputIndex, itemId, item, new StringBuilder(), isCustom);
+            function = new StreamFunctionItem(
+                upstreamIndex,
+                outputIndex,
+                itemId,
+                item,
+                new StringBuilder(),
+                isCustom,
+                upstreamFunctionName);
             _functions[upstreamIndex] = function;
             _items.Add(new StreamOutputItem(outputIndex, item));
             if (!string.IsNullOrWhiteSpace(functionName))
@@ -1557,10 +1886,14 @@ internal sealed class KimiResponsesStreamState
         }
 
         var functionDelta = KimiResponsesTranslator.ReadPropertyForStream(toolCall, "function");
-        var name = KimiResponsesTranslator.ReadStringForStream(functionDelta, "name");
+        var upstreamName = KimiResponsesTranslator.ReadStringForStream(functionDelta, "name");
+        var name = string.IsNullOrWhiteSpace(upstreamName)
+            ? upstreamName
+            : _toolNameMap?.ToOriginal(upstreamName) ?? upstreamName;
         if (!string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(function.Item["name"]?.GetValue<string>()))
         {
             function.Item["name"] = name;
+            function.UpstreamName = upstreamName!;
             function.IsCustom = _customToolNames.Contains(name);
             if (function.IsCustom)
             {
@@ -1718,7 +2051,8 @@ internal sealed class KimiResponsesStreamState
             string itemId,
             JsonObject item,
             StringBuilder arguments,
-            bool isCustom)
+            bool isCustom,
+            string upstreamName)
         {
             UpstreamIndex = upstreamIndex;
             OutputIndex = outputIndex;
@@ -1726,6 +2060,7 @@ internal sealed class KimiResponsesStreamState
             Item = item;
             Arguments = arguments;
             IsCustom = isCustom;
+            UpstreamName = upstreamName;
         }
 
         public int UpstreamIndex { get; }
@@ -1739,6 +2074,8 @@ internal sealed class KimiResponsesStreamState
         public StringBuilder Arguments { get; }
 
         public bool IsCustom { get; set; }
+
+        public string UpstreamName { get; set; }
 
         public bool Added { get; set; }
 

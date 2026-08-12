@@ -216,6 +216,7 @@ public sealed partial class ConfigService
         string tokenBrokerWindowsPath,
         string credentialTarget)
     {
+        ProviderAvailabilityPolicy.RequireAvailableThirdPartyRoute(baseUrl, model);
         var normalizedBaseUrl = NormalizeBaseUrl(baseUrl);
         var brokerWslPath = ToWslPath(tokenBrokerWindowsPath);
         credentialTarget = CredentialTargetFactory.RequireValid(credentialTarget);
@@ -242,6 +243,7 @@ public sealed partial class ConfigService
         string tokenBrokerWindowsPath,
         string credentialTarget)
     {
+        ProviderAvailabilityPolicy.RequireKimiRouteEnabled();
         var brokerDirectory = Path.GetDirectoryName(tokenBrokerWindowsPath)
             ?? throw new ArgumentException(
                 "The token broker path has no parent directory.",

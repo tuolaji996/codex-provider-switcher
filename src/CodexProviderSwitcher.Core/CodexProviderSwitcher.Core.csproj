@@ -9,4 +9,8 @@
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodexProviderSwitcher.SelfTest" />
+  </ItemGroup>
 </Project>

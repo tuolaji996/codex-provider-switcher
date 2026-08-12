@@ -3,8 +3,7 @@
 A native Windows WPF application that switches Codex between:
 
 - the existing official ChatGPT/OpenAI login; and
-- an OpenAI-compatible third-party Responses API; or
-- the experimental SuiXiang K3 route through the bundled loopback adapter.
+- an OpenAI-compatible third-party Responses API.
 
 The switcher deliberately keeps `model_provider = "OpenAI"` in both modes. Codex
 stores the provider ID in its thread index, so changing that ID creates separate
@@ -34,21 +33,12 @@ and to select Light, Dark, or System appearance. Both choices are remembered.
 On a new install, the application opens a short bilingual setup flow. It first
 checks the Codex configuration, WebView2 availability, current route, and
 managed credential reference without reading an API key or changing any
-setting. It then offers four equally valid choices:
+setting. It then offers three choices:
 
 - **Sign in with SuiXiang** opens SuiXiang's real sign-in page in an isolated
   WebView2 profile. The user completes any Tencent CAPTCHA personally. The app
   does not read passwords, CAPTCHA data, or cookies. After sign-in, the user
   creates an API key with SuiXiang and pastes it into the app.
-- **Connect SuiXiang K3 (experimental)** uses a SuiXiang API key for **`k3`**.
-  An existing key is reused only when exactly one saved K3 account matches the
-  normalized Base URL, model, and adapter. Direct SuiXiang accounts and
-  duplicate K3 accounts are never selected implicitly. The app verifies
-  SuiXiang's upstream Chat Completions endpoint,
-  health-checks and starts the bundled Linux router inside WSL, then builds its
-  managed model catalog and restarts Codex around the startup-only
-  catalog/config write. Other SuiXiang model IDs remain ordinary direct
-  Responses routes; only `k3` uses the experimental bridge.
 - **Use another service** accepts an OpenAI-compatible Base URL, model, and a
   newly generated API key.
 - **Use official Codex for now** keeps the current official route unchanged.
@@ -77,15 +67,16 @@ custom providers. **Refresh model list** resolves the credential for the
 currently entered Base URL only, never reusing a key from another profile. A
 missing current model is retained and called out as still requiring a live
 compatibility test. SuiXiang refreshes its list dynamically and every switch
-performs a fresh live compatibility test; direct models use SuiXiang Responses,
-while `k3` uses the upstream Chat Completions contract plus the WSL bridge
-health check. Any SuiXiang failure is fail closed, with no write-anyway option.
+performs a fresh live compatibility test through SuiXiang Responses. The retired
+`k3` route is filtered from discovery and rejected before any network or
+configuration change. Any SuiXiang failure is fail closed, with no write-anyway
+option.
 The Providers page also lets you create and select multiple saved key profiles,
 including multiple keys for the same SuiXiang Base URL.
 
 ## Interface
 
-Version 1.4.2 uses a compact native Windows workspace:
+Version 1.4.3 uses a compact native Windows workspace:
 
 - **Home:** current route, shared-history health, and quick switching.
 - **Providers:** official OpenAI and third-party endpoint, model, and key
@@ -96,13 +87,12 @@ Version 1.4.2 uses a compact native Windows workspace:
 - **Settings:** language, appearance, restart behavior, Sol Ultra readiness,
   optional Luna task agent, automatic update status, and local data access.
 
-The SuiXiang K3 route is experimental and intentionally limited to text
-Responses and ordinary function tools. It does not promise image generation,
-Mobile Remote, or native Codex plugin/app transports. Its API key remains
-scoped to the SuiXiang upstream profile while Codex itself talks only to the
-WSL-local `127.0.0.1:17866/v1` router. The release also retains a Windows
-router binary for migration and diagnostics, but active Codex traffic does not
-cross the Windows/WSL loopback boundary.
+The experimental SuiXiang K3 route is retired in v1.4.3. It is hidden from new
+setup, model discovery, and the saved-account picker, and core validation blocks
+new K3 tests and switches. Existing K3 profiles and credentials are preserved
+for recovery but are not exposed as selectable accounts. If a legacy K3 config
+is still active, the app shows a bilingual warning and lets the user switch to
+official OpenAI or a supported direct provider without deleting chat history.
 
 In Simplified Chinese Codex builds, xhigh and Ultra can both appear as `极高`.
 Ultra is the bottom item with the `更快消耗使用额度` warning. The switcher checks
@@ -138,9 +128,8 @@ silently; the user chooses the release asset from GitHub.
 - Session JSONL files and chat bodies are not rewritten during provider switches.
 - The GUI requires a complete `/v1/responses` SSE result because Codex does not
   use the Chat Completions wire protocol for custom providers.
-- SuiXiang K3 switching starts the bundled WSL-local router only after an
-  upstream compatibility test and an in-WSL health check. The router is
-  launched without API keys or secrets in command-line arguments or logs.
+- Retiring K3 does not delete its saved profile, credential, backups, or chat
+  history. New K3 network tests and configuration writes fail closed.
 
 An API key pasted into a chat must be considered exposed. Revoke it at the
 provider and create a new one before saving it in this app.
@@ -220,18 +209,16 @@ OpenAI references:
 - The switcher can preserve and inspect the prerequisites for Remote, but the
   official desktop/mobile pairing cannot be completed or proven by this
   utility.
-- If automatic restart is enabled, switching briefly interrupts active Remote
-  sessions while the official desktop app restarts. The utility does not sign
-  out or delete device pairings.
+- Every provider switch briefly interrupts active tasks and Remote sessions:
+  the utility stops Codex, writes and verifies the route, then starts Codex
+  and waits for it to stabilize. It does not sign out or delete device
+  pairings.
 - The endpoint must support `/v1/responses` and SSE streaming. A
   Chat-Completions-only endpoint is not compatible.
-- SuiXiang K3 is an experimental adapter for `k3` only. The router's managed
-  catalog is startup-loaded, so SuiXiang K3 switches and switches away from
-  SuiXiang K3 always stop and restart Codex even when the generic restart
-  preference is disabled.
-- SuiXiang K3 currently has no image, Mobile Remote, or native Codex plugin/app
-  capability guarantee; other SuiXiang models and ordinary custom providers
-  retain direct Responses behavior and editable model IDs.
+- K3 remains retired. The bundled adapter files are retained only so upgrades
+  can recognize and safely leave an existing legacy configuration; they are not
+  a supported provider option. Other SuiXiang models and ordinary custom
+  providers retain direct Responses behavior and editable model IDs.
 - The default endpoint and model are examples and can be changed in the GUI.
 - Provider traffic can contain prompts, source code, and tool context. The
   third-party provider's privacy, retention, billing, and availability policies
@@ -250,7 +237,7 @@ already included on the target machine. A .NET 8 SDK is needed only to build.
 To create the versioned ZIP and SHA-256 file used by GitHub Releases:
 
 ```powershell
-.\release.ps1 -Version 1.4.2 -DotNet "C:\path\to\dotnet.exe"
+.\release.ps1 -Version 1.4.3 -DotNet "C:\path\to\dotnet.exe"
 ```
 
 The installed files are placed in:

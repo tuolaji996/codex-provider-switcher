@@ -132,7 +132,7 @@
                                    VerticalAlignment="Center" />
                         <TextBlock x:Name="VersionText"
                                    Grid.Column="2"
-                                   Text="v1.4.2"
+                                   Text="v1.4.3"
                                    Foreground="{DynamicResource SubtleTextBrush}"
                                    FontSize="10"
                                    Margin="8,0,0,0"
@@ -1113,11 +1113,11 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Margin="0,0,20,0">
                                 <TextBlock x:Name="RestartTitleText"
-                                           Text="切换后自动重启 Codex"
+                                           Text="切换时重启 Codex"
                                            FontWeight="SemiBold"
                                            FontSize="13" />
                                 <TextBlock x:Name="RestartDescriptionText"
-                                           Text="重启会中断正在运行的 Codex 任务。配置写入前会自动生成备份。"
+                                           Text="切换会停止、写入并校验配置后再启动 Codex。写入前会自动生成备份。"
                                            Style="{StaticResource PageLeadStyle}"
                                            Margin="0,2,0,0" />
                             </StackPanel>
@@ -1126,8 +1126,8 @@
                                       Style="{StaticResource SwitchStyle}"
                                       AutomationProperties.LabeledBy="{Binding ElementName=RestartTitleText}"
                                       VerticalAlignment="Center"
-                                      Checked="RestartCheckBox_Changed"
-                                      Unchecked="RestartCheckBox_Changed" />
+                                      IsChecked="True"
+                                      IsEnabled="False" />
                         </Grid>
                     </Border>
 
@@ -1273,7 +1273,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Margin="0,0,20,0">
                                 <TextBlock x:Name="SettingsVersionText"
-                                           Text="Codex Provider Switcher v1.4.2"
+                                           Text="Codex Provider Switcher v1.4.3"
                                            FontWeight="SemiBold"
                                            FontSize="13" />
                                 <TextBlock x:Name="SettingsStorageDescriptionText"

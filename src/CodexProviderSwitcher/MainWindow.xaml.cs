@@ -55,7 +55,7 @@ public partial class MainWindow : Window
     private bool _updateCheckFailed;
     private bool _isCheckingForUpdates;
     private bool _solUltraAvailable;
-    private string? _kimiRestartWarning;
+    private string? _configurationRestartWarning;
     private bool _isRefreshingProviderProfiles;
     // The picker is deliberately a draft selector.  A saved account is not
     // made active just because the user looked at it; the active profile is
@@ -130,7 +130,11 @@ public partial class MainWindow : Window
             BaseUrlTextBox.Text = _settings.ThirdPartyBaseUrl;
             ModelComboBox.Text = _settings.ThirdPartyModel;
             RefreshProviderProfilePicker();
-            RestartCheckBox.IsChecked = _settings.RestartAfterSwitch;
+            // Every provider change is a stop -> write/verify -> start
+            // transaction.  Keep the legacy persisted preference for
+            // compatibility, but it no longer changes that safety boundary.
+            _settings.RestartAfterSwitch = true;
+            RestartCheckBox.IsChecked = true;
             OpenGeneratedImageButton.IsEnabled = HasGeneratedImage();
             UpdatePersistedProviderCapabilityStatuses();
             RefreshBackups();
@@ -771,28 +775,21 @@ public partial class MainWindow : Window
                 var switchRequest = new OfficialSwitchRequest(
                     _settings.OfficialModel,
                     _settings.OfficialReviewModel);
-                var leavingKimi = IsKimiConfig(current);
                 var switchResult = await SwitchToOfficialFromCurrentConfigAsync(
-                    switchRequest,
-                    current);
+                    switchRequest);
                 RefreshLunaWorkerAgentStatus(switchResult.VerifiedStatus);
-                var activeKimiRestartWarning = _kimiRestartWarning;
-                OperationStatusText.Text = F(
-                    leavingKimi
-                        ? "已切换到官方 Codex；随想 K3 配置写入时强制停止并重启了 Codex。备份：{0}"
-                        : "已切换到官方 Codex。备份：{0}",
-                    leavingKimi
-                        ? "Switched to official Codex; Codex was forcibly stopped and restarted while leaving SuiXiang K3. Backup: {0}"
-                        : "Switched to official Codex. Backup: {0}",
-                    switchResult.BackupFolder);
-                if (!string.IsNullOrWhiteSpace(activeKimiRestartWarning))
-                {
-                    OperationStatusText.Text += $" {activeKimiRestartWarning}";
-                }
-                if (!leavingKimi)
-                {
-                    await RestartIfRequestedAsync();
-                }
+                var setupConfigurationRestartWarning = _configurationRestartWarning;
+                OperationStatusText.Text = string.IsNullOrWhiteSpace(
+                    setupConfigurationRestartWarning)
+                    ? F(
+                        "已切换到官方 Codex；已完成配置写入并重新启动 Codex。备份：{0}",
+                        "Switched to official Codex; the configuration was written and Codex was restarted. Backup: {0}",
+                        switchResult.BackupFolder)
+                    : F(
+                        "官方配置已写入并验证，但 Codex 启动未确认。备份：{0}。{1}",
+                        "The official configuration was written and verified, but Codex startup was not confirmed. Backup: {0}. {1}",
+                        switchResult.BackupFolder,
+                        setupConfigurationRestartWarning);
             }
 
             CompleteOnboarding();
@@ -803,6 +800,11 @@ public partial class MainWindow : Window
 
         var baseUrl = ConfigService.NormalizeBaseUrl(setup.BaseUrl);
         var model = setup.Model.Trim();
+        if (setup.ProviderKind == ProviderKinds.Kimi)
+        {
+            ProviderAvailabilityPolicy.RequireKimiRouteEnabled();
+        }
+        ProviderAvailabilityPolicy.RequireAvailableThirdPartyRoute(baseUrl, model);
         var apiKey = setup.ApiKey?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(model))
         {
@@ -868,8 +870,6 @@ public partial class MainWindow : Window
         var before = CloneProviderProfile(profile);
         var target = CredentialTargetFactory.RequireValid(profile.CredentialTarget);
         var previousKey = CredentialVault.Read(target);
-        var currentConfig = _configService.ReadStatus();
-        var leavingKimiConfig = IsKimiConfig(currentConfig);
         var switched = false;
         try
         {
@@ -886,8 +886,7 @@ public partial class MainWindow : Window
                     model,
                     baseUrl,
                     TokenBrokerPath,
-                    target),
-                currentConfig);
+                    target));
             switched = true;
             RefreshLunaWorkerAgentStatus(switchResult.VerifiedStatus);
 
@@ -897,21 +896,22 @@ public partial class MainWindow : Window
             CompleteOnboarding();
             BaseUrlTextBox.Text = baseUrl;
             ModelComboBox.Text = model;
-            var genericKimiRestartWarning = _kimiRestartWarning;
-            OperationStatusText.Text = F(
-                leavingKimiConfig
-                    ? "已连接 {0}；离开随想 K3 时配置写入期间强制停止并重启了 Codex，历史分区保持 {1}。备份：{2}"
-                    : "已连接 {0}；历史分区保持 {1}。备份：{2}",
-                leavingKimiConfig
-                    ? "Connected to {0}; Codex was forcibly stopped and restarted while leaving SuiXiang K3. The history partition remains {1}. Backup: {2}"
-                    : "Connected to {0}; the history partition remains {1}. Backup: {2}",
-                profile.DisplayName,
-                AppPaths.StableProviderId,
-                switchResult.BackupFolder);
-            if (!string.IsNullOrWhiteSpace(genericKimiRestartWarning))
-            {
-                OperationStatusText.Text += $" {genericKimiRestartWarning}";
-            }
+            var configurationRestartWarning = _configurationRestartWarning;
+            OperationStatusText.Text = string.IsNullOrWhiteSpace(
+                configurationRestartWarning)
+                ? F(
+                    "已连接 {0}；已完成配置写入并重新启动 Codex，历史分区保持 {1}。备份：{2}",
+                    "Connected to {0}; the configuration was written and Codex was restarted. The history partition remains {1}. Backup: {2}",
+                    profile.DisplayName,
+                    AppPaths.StableProviderId,
+                    switchResult.BackupFolder)
+                : F(
+                    "{0} 配置已写入并验证，但 Codex 启动未确认；历史分区仍为 {1}。备份：{2}。{3}",
+                    "The {0} configuration was written and verified, but Codex startup was not confirmed; the history partition remains {1}. Backup: {2}. {3}",
+                    profile.DisplayName,
+                    AppPaths.StableProviderId,
+                    switchResult.BackupFolder,
+                    configurationRestartWarning);
         }
         catch when (!switched)
         {
@@ -937,10 +937,6 @@ public partial class MainWindow : Window
 
         await RefreshStatusAsync();
         RefreshBackups();
-        if (!leavingKimiConfig)
-        {
-            await RestartIfRequestedAsync();
-        }
     }
 
     private async Task ApplyKimiSetupResultAsync(
@@ -1008,16 +1004,20 @@ public partial class MainWindow : Window
             CompleteOnboarding();
             BaseUrlTextBox.Text = upstreamBaseUrl;
             ModelComboBox.Text = model;
-            var kimiRestartWarning = _kimiRestartWarning;
-            OperationStatusText.Text = F(
-                "已连接随想 K3（实验）；配置写入时 Codex 已停止并强制重启，历史分区保持 {0}。备份：{1}",
-                "Connected to SuiXiang K3 (experimental); Codex was stopped and forcibly restarted for the write. The history partition remains {0}. Backup: {1}",
-                AppPaths.StableProviderId,
-                switchResult.BackupFolder);
-            if (!string.IsNullOrWhiteSpace(kimiRestartWarning))
-            {
-                OperationStatusText.Text += $" {kimiRestartWarning}";
-            }
+            var configurationRestartWarning = _configurationRestartWarning;
+            OperationStatusText.Text = string.IsNullOrWhiteSpace(
+                configurationRestartWarning)
+                ? F(
+                    "已连接随想 K3（实验）；已完成配置写入并重新启动 Codex，历史分区保持 {0}。备份：{1}",
+                    "Connected to SuiXiang K3 (experimental); the configuration was written and Codex was restarted. The history partition remains {0}. Backup: {1}",
+                    AppPaths.StableProviderId,
+                    switchResult.BackupFolder)
+                : F(
+                    "随想 K3 配置已写入并验证，但 Codex 启动未确认；历史分区仍为 {0}。备份：{1}。{2}",
+                    "The SuiXiang K3 configuration was written and verified, but Codex startup was not confirmed; the history partition remains {0}. Backup: {1}. {2}",
+                    AppPaths.StableProviderId,
+                    switchResult.BackupFolder,
+                    configurationRestartWarning);
         }
         catch when (!switched)
         {
@@ -1040,8 +1040,7 @@ public partial class MainWindow : Window
 
         await RefreshStatusAsync();
         RefreshBackups();
-        // Kimi always restarts Codex around its catalog/config transaction;
-        // the generic RestartAfterSwitch preference is intentionally ignored.
+        // Every route is switched as the same config transaction.
     }
 
     private ProviderProfile SelectOrCreateProfileForSetup(
@@ -1246,6 +1245,15 @@ public partial class MainWindow : Window
     {
         var status = _configService.ReadStatus();
         if (status.Mode == ProviderMode.Official &&
+            ProviderAvailabilityPolicy.IsRetiredKimiProfile(ActiveProviderProfile))
+        {
+            ProvidersNavigationButton.IsChecked = true;
+            OperationStatusText.Text = T(
+                "K3 线路已停用，请添加或选择其他第三方线路。",
+                "The K3 route has been retired. Add or select another third-party route.");
+            return;
+        }
+        if (status.Mode == ProviderMode.Official &&
             CredentialVault.Exists(ActiveCredentialTarget))
         {
             SwitchThirdPartyButton_Click(sender, e);
@@ -1300,8 +1308,17 @@ public partial class MainWindow : Window
 
     private void UpdateDailyPrimaryAction(ConfigStatus status)
     {
+        var retiredActiveProfile =
+            ProviderAvailabilityPolicy.IsRetiredKimiProfile(ActiveProviderProfile);
         switch (status.Mode)
         {
+            case ProviderMode.Official when retiredActiveProfile:
+                DailyPrimaryActionButton.Content = T(
+                    "选择可用线路",
+                    "Choose an available route");
+                DailyPrimaryActionButton.Tag = "\uE8AB";
+                DailyPrimaryActionButton.Style = (Style)FindResource("PrimaryButton");
+                break;
             case ProviderMode.Official when CredentialVault.Exists(ActiveCredentialTarget):
                 DailyPrimaryActionButton.Content = F(
                     "切换到 {0}",
@@ -1871,13 +1888,13 @@ public partial class MainWindow : Window
                 DescribeKimiCompatibilityFailure(compatibility));
         }
 
-        _kimiRestartWarning = null;
+        _configurationRestartWarning = null;
         var codexStopped = false;
         try
         {
             OperationStatusText.Text = T(
-                "正在关闭 Codex，并在停止期间生成随想 K3 模型目录、写入配置…",
-                "Stopping Codex; the SuiXiang K3 model catalog and route configuration will be written while it is stopped...");
+                "正在停止 Codex，写入并验证新线路配置…",
+                "Stopping Codex to write and verify the new route configuration...");
             await _processService.StopAsync();
             codexStopped = true;
             return _switchWorkflow.SwitchToKimi(
@@ -1893,19 +1910,19 @@ public partial class MainWindow : Window
                 try
                 {
                     OperationStatusText.Text = T(
-                        "随想 K3 配置已写入，正在强制重新启动 Codex…",
-                        "The SuiXiang K3 configuration was written; forcibly restarting Codex...");
+                        "新线路配置已验证，正在等待 Codex 完成启动…",
+                        "The new route configuration was verified; waiting for Codex to finish starting...");
                     await _processService.StartAsync();
                 }
                 catch (Exception exception)
                 {
                     // Keep the config/profile coherent after a successful write;
                     // report startup failure without reverting only UI metadata.
-                    _kimiRestartWarning = F(
-                        "Codex 重新启动失败：{0}。请手动启动 Codex。",
-                        "Codex could not be restarted: {0}. Start Codex manually.",
+                    _configurationRestartWarning = F(
+                        "新线路配置已写入，但 Codex 未能在规定时间内启动：{0}。请手动启动 Codex。",
+                        "The new route configuration was written, but Codex did not start in time: {0}. Start Codex manually.",
                         exception.Message);
-                    OperationStatusText.Text = _kimiRestartWarning;
+                    OperationStatusText.Text = _configurationRestartWarning;
                 }
             }
         }
@@ -2049,7 +2066,7 @@ public partial class MainWindow : Window
                     RestoreAttemptedProviderState();
                     throw;
                 }
-                _settings.RestartAfterSwitch = RestartCheckBox.IsChecked == true;
+                _settings.RestartAfterSwitch = true;
                 _settings.ActiveProviderProfileId = attemptedProfile.Id;
                 _selectedProviderProfileId = attemptedProfile.Id;
                 _isNewProviderProfileDraft = false;
@@ -2060,20 +2077,23 @@ public partial class MainWindow : Window
                 _settings.LastSuccessfulCompatibilityTestUtc = DateTimeOffset.UtcNow;
                 _settingsStore.Save(_settings);
                 RefreshLunaWorkerAgentStatus(kimiSwitch.VerifiedStatus);
-                var activeKimiRestartWarning = _kimiRestartWarning;
-                OperationStatusText.Text = F(
-                    "已切换到随想 K3（实验）；配置写入时 Codex 已停止并强制重启，历史分区保持 {0}。备份：{1}",
-                    "Switched to SuiXiang K3 (experimental); Codex was stopped and forcibly restarted for the write. The history partition remains {0}. Backup: {1}",
-                    AppPaths.StableProviderId,
-                    kimiSwitch.BackupFolder);
-                if (!string.IsNullOrWhiteSpace(activeKimiRestartWarning))
-                {
-                    OperationStatusText.Text += $" {activeKimiRestartWarning}";
-                }
+                var kimiConfigurationRestartWarning = _configurationRestartWarning;
+                OperationStatusText.Text = string.IsNullOrWhiteSpace(
+                    kimiConfigurationRestartWarning)
+                    ? F(
+                        "已切换到随想 K3（实验）；已完成配置写入并重新启动 Codex，历史分区保持 {0}。备份：{1}",
+                        "Switched to SuiXiang K3 (experimental); the configuration was written and Codex was restarted. The history partition remains {0}. Backup: {1}",
+                        AppPaths.StableProviderId,
+                        kimiSwitch.BackupFolder)
+                    : F(
+                        "随想 K3 配置已写入并验证，但 Codex 启动未确认；历史分区仍为 {0}。备份：{1}。{2}",
+                        "The SuiXiang K3 configuration was written and verified, but Codex startup was not confirmed; the history partition remains {0}. Backup: {1}. {2}",
+                        AppPaths.StableProviderId,
+                        kimiSwitch.BackupFolder,
+                        kimiConfigurationRestartWarning);
                 await RefreshStatusAsync();
                 RefreshBackups();
-                // Kimi always restarts Codex around its catalog/config transaction;
-                // the generic RestartAfterSwitch preference is intentionally ignored.
+                // Every route is switched as the same config transaction.
                 return;
             }
             var suiXiangRoute = IsSuiXiangProfile(attemptedProfile);
@@ -2168,17 +2188,15 @@ public partial class MainWindow : Window
                 _settingsStore.Save(_settings);
             }
 
-            var leavingKimi = IsKimiConfig(current);
             ProviderSwitchResult switchResult;
             try
             {
                 switchResult = await SwitchToThirdPartyFromCurrentConfigAsync(
-                        new ThirdPartySwitchRequest(
+                    new ThirdPartySwitchRequest(
                         attemptedProfile.Model,
                         attemptedProfile.BaseUrl,
                         TokenBrokerPath,
-                        selectedCredentialTarget!),
-                    current);
+                        selectedCredentialTarget!));
             }
             catch
             {
@@ -2197,27 +2215,22 @@ public partial class MainWindow : Window
             RefreshProviderProfilePicker();
             UpdateKeyStatusText();
 
-            var kimiRestartWarning = _kimiRestartWarning;
-            OperationStatusText.Text =
-                F(
-                    leavingKimi
-                        ? "已切换到第三方；离开随想 K3 时配置写入期间强制停止并重启了 Codex，历史分区保持 {0}。备份：{1}"
-                        : "已切换到第三方；历史分区保持 {0}。备份：{1}",
-                    leavingKimi
-                        ? "Switched to the third-party route; Codex was forcibly stopped and restarted while leaving SuiXiang K3. The history partition remains {0}. Backup: {1}"
-                        : "Switched to the third-party route; the history partition remains {0}. Backup: {1}",
+            var configurationRestartWarning = _configurationRestartWarning;
+            OperationStatusText.Text = string.IsNullOrWhiteSpace(
+                configurationRestartWarning)
+                ? F(
+                    "已切换到第三方；已完成配置写入并重新启动 Codex，历史分区保持 {0}。备份：{1}",
+                    "Switched to the third-party route; the configuration was written and Codex was restarted. The history partition remains {0}. Backup: {1}",
                     AppPaths.StableProviderId,
-                    switchResult.BackupFolder);
-            if (!string.IsNullOrWhiteSpace(kimiRestartWarning))
-            {
-                OperationStatusText.Text += $" {kimiRestartWarning}";
-            }
+                    switchResult.BackupFolder)
+                : F(
+                    "第三方配置已写入并验证，但 Codex 启动未确认；历史分区仍为 {0}。备份：{1}。{2}",
+                    "The third-party configuration was written and verified, but Codex startup was not confirmed; the history partition remains {0}. Backup: {1}. {2}",
+                    AppPaths.StableProviderId,
+                    switchResult.BackupFolder,
+                    configurationRestartWarning);
             await RefreshStatusAsync();
             RefreshBackups();
-            if (!leavingKimi)
-            {
-                await RestartIfRequestedAsync();
-            }
         });
     }
 
@@ -2242,41 +2255,26 @@ public partial class MainWindow : Window
         };
     }
 
-    private static bool IsKimiConfig(ConfigStatus status) =>
-        status.Mode == ProviderMode.ThirdParty &&
-        (string.Equals(
-             status.ModelCatalogJson,
-             AppPaths.KimiModelCatalogFileName,
-             StringComparison.Ordinal) ||
-         (status.BaseUrl is not null &&
-          SettingsStore.IsKimiLoopbackBaseUrl(status.BaseUrl)));
-
     private Task<ProviderSwitchResult> SwitchToThirdPartyFromCurrentConfigAsync(
-        ThirdPartySwitchRequest request,
-        ConfigStatus current) =>
-        IsKimiConfig(current)
-            ? SwitchConfigWhileCodexStoppedAsync(
-                () => _switchWorkflow.SwitchToThirdParty(request))
-            : Task.FromResult(_switchWorkflow.SwitchToThirdParty(request));
+        ThirdPartySwitchRequest request) =>
+        SwitchConfigWhileCodexStoppedAsync(
+            () => _switchWorkflow.SwitchToThirdParty(request));
 
     private Task<ProviderSwitchResult> SwitchToOfficialFromCurrentConfigAsync(
-        OfficialSwitchRequest request,
-        ConfigStatus current) =>
-        IsKimiConfig(current)
-            ? SwitchConfigWhileCodexStoppedAsync(
-                () => _switchWorkflow.SwitchToOfficial(request))
-            : Task.FromResult(_switchWorkflow.SwitchToOfficial(request));
+        OfficialSwitchRequest request) =>
+        SwitchConfigWhileCodexStoppedAsync(
+            () => _switchWorkflow.SwitchToOfficial(request));
 
     private async Task<ProviderSwitchResult> SwitchConfigWhileCodexStoppedAsync(
         Func<ProviderSwitchResult> writeConfig)
     {
-        _kimiRestartWarning = null;
+        _configurationRestartWarning = null;
         var codexStopped = false;
         try
         {
             OperationStatusText.Text = T(
-                "当前随想 K3 使用启动时模型目录；正在关闭 Codex 后写入新线路配置…",
-                "SuiXiang K3's model catalog is loaded at startup; stopping Codex before writing the new route...");
+                "正在停止 Codex，写入并验证新线路配置…",
+                "Stopping Codex to write and verify the new route configuration...");
             await _processService.StopAsync();
             codexStopped = true;
             return writeConfig();
@@ -2288,17 +2286,17 @@ public partial class MainWindow : Window
                 try
                 {
                     OperationStatusText.Text = T(
-                        "新线路配置已写入，正在强制重新启动 Codex…",
-                        "The new route configuration was written; forcibly restarting Codex...");
+                        "新线路配置已验证，正在等待 Codex 完成启动…",
+                        "The new route configuration was verified; waiting for Codex to finish starting...");
                     await _processService.StartAsync();
                 }
                 catch (Exception exception)
                 {
-                    _kimiRestartWarning = F(
-                        "Codex 重新启动失败：{0}。请手动启动 Codex。",
-                        "Codex could not be restarted: {0}. Start Codex manually.",
+                    _configurationRestartWarning = F(
+                        "新线路配置已写入，但 Codex 未能在规定时间内启动：{0}。请手动启动 Codex。",
+                        "The new route configuration was written, but Codex did not start in time: {0}. Start Codex manually.",
                         exception.Message);
-                    OperationStatusText.Text = _kimiRestartWarning;
+                    OperationStatusText.Text = _configurationRestartWarning;
                 }
             }
         }
@@ -2308,49 +2306,29 @@ public partial class MainWindow : Window
     {
         await RunBusyAsync(async () =>
         {
-            _settings.RestartAfterSwitch = RestartCheckBox.IsChecked == true;
+            _settings.RestartAfterSwitch = true;
             _settingsStore.Save(_settings);
-            var current = _configService.ReadStatus();
-            var leavingKimi = IsKimiConfig(current);
             var switchResult = await SwitchToOfficialFromCurrentConfigAsync(
                 new OfficialSwitchRequest(
                     _settings.OfficialModel,
-                    _settings.OfficialReviewModel),
-                current);
+                    _settings.OfficialReviewModel));
             RefreshLunaWorkerAgentStatus(switchResult.VerifiedStatus);
 
-            var kimiRestartWarning = _kimiRestartWarning;
-            OperationStatusText.Text =
-                F(
-                    leavingKimi
-                        ? "已切换到官方 OpenAI；离开随想 K3 时配置写入期间强制停止并重启了 Codex。官方登录凭据保持不变。备份：{0}"
-                        : "已切换到官方 OpenAI；官方登录凭据保持不变。备份：{0}",
-                    leavingKimi
-                        ? "Switched to official OpenAI; Codex was forcibly stopped and restarted while leaving SuiXiang K3. Official sign-in credentials were preserved. Backup: {0}"
-                        : "Switched to official OpenAI; official sign-in credentials were preserved. Backup: {0}",
-                    switchResult.BackupFolder);
-            if (!string.IsNullOrWhiteSpace(kimiRestartWarning))
-            {
-                OperationStatusText.Text += $" {kimiRestartWarning}";
-            }
+            var configurationRestartWarning = _configurationRestartWarning;
+            OperationStatusText.Text = string.IsNullOrWhiteSpace(
+                configurationRestartWarning)
+                ? F(
+                    "已切换到官方 OpenAI；已完成配置写入并重新启动 Codex。官方登录凭据保持不变。备份：{0}",
+                    "Switched to official OpenAI; the configuration was written and Codex was restarted. Official sign-in credentials were preserved. Backup: {0}",
+                    switchResult.BackupFolder)
+                : F(
+                    "官方 OpenAI 配置已写入并验证，但 Codex 启动未确认；官方登录凭据保持不变。备份：{0}。{1}",
+                    "The official OpenAI configuration was written and verified, but Codex startup was not confirmed; official sign-in credentials were preserved. Backup: {0}. {1}",
+                    switchResult.BackupFolder,
+                    configurationRestartWarning);
             await RefreshStatusAsync();
             RefreshBackups();
-            if (!leavingKimi)
-            {
-                await RestartIfRequestedAsync();
-            }
         });
-    }
-
-    private void RestartCheckBox_Changed(object sender, RoutedEventArgs e)
-    {
-        if (!_isInitialized)
-        {
-            return;
-        }
-
-        _settings.RestartAfterSwitch = RestartCheckBox.IsChecked == true;
-        _settingsStore.Save(_settings);
     }
 
     private void OpenBackupsButton_Click(object sender, RoutedEventArgs e)
@@ -2481,6 +2459,10 @@ public partial class MainWindow : Window
                 "The third-party model cannot be empty."));
         }
 
+        ProviderAvailabilityPolicy.RequireAvailableThirdPartyRoute(
+            normalizedBaseUrl,
+            model);
+
         var kimiBridge = SettingsStore.IsKimiBaseUrl(normalizedBaseUrl) &&
                           string.Equals(
                               model,
@@ -2506,7 +2488,7 @@ public partial class MainWindow : Window
             profile.DisplayName = uri.Host;
         }
 
-        _settings.RestartAfterSwitch = RestartCheckBox.IsChecked == true;
+        _settings.RestartAfterSwitch = true;
         if (persist)
         {
             _settingsStore.Save(_settings);
@@ -2641,7 +2623,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        var profiles = _settings.ProviderProfiles.ToList();
+        var profiles = _settings.ProviderProfiles
+            .Where(profile =>
+                !ProviderAvailabilityPolicy.IsRetiredKimiProfile(profile))
+            .ToList();
         _isRefreshingProviderProfiles = true;
         try
         {
@@ -2678,6 +2663,7 @@ public partial class MainWindow : Window
         var routeName = ResolveProfileRouteName(profile);
         var sameRouteProfiles = _settings.ProviderProfiles
             .Where(candidate =>
+                !ProviderAvailabilityPolicy.IsRetiredKimiProfile(candidate) &&
                 ProfileMatchesBaseUrl(candidate, NormalizeProfileBaseUrl(profile)) &&
                 string.Equals(
                     candidate.Model.Trim(),
@@ -2811,15 +2797,16 @@ public partial class MainWindow : Window
         {
             var baseUrl = ConfigService.NormalizeBaseUrl(BaseUrlTextBox.Text);
             var model = ModelComboBox.Text.Trim();
-            if (string.IsNullOrWhiteSpace(model))
+            if (string.IsNullOrWhiteSpace(model) ||
+                ProviderAvailabilityPolicy.IsRetiredKimiRoute(baseUrl, model))
             {
                 model = AppPaths.DefaultThirdPartyModel;
             }
 
             // Do not create an empty profile.  The new account is only added
             // after a valid key is saved or a successful switch writes it.
-            // In particular, preserve a selected K3 model instead of silently
-            // turning it into the default direct OpenAI model.
+            // A retired K3 selection becomes a fresh direct-provider draft.
+            // The legacy K3 profile and credential remain untouched.
             _selectedProviderProfileId = null;
             _isNewProviderProfileDraft = true;
             BaseUrlTextBox.Text = baseUrl;
@@ -2852,6 +2839,11 @@ public partial class MainWindow : Window
     {
         if (_isInitialized)
         {
+            var selected = ModelComboBox.SelectedItem?.ToString();
+            if (!string.IsNullOrWhiteSpace(selected))
+            {
+                ModelComboBox.Text = selected;
+            }
             UpdatePersistedProviderCapabilityStatuses();
             UpdateKimiUi();
         }
@@ -2896,6 +2888,10 @@ public partial class MainWindow : Window
             var models = result.Models
                 .Where(model => !string.IsNullOrWhiteSpace(model))
                 .Select(model => model.Trim())
+                .Where(model =>
+                    !ProviderAvailabilityPolicy.IsRetiredKimiRoute(
+                        normalizedBaseUrl,
+                        model))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
             var suiXiangDiscovery = SettingsStore.IsKimiBaseUrl(normalizedBaseUrl);
@@ -2915,8 +2911,8 @@ public partial class MainWindow : Window
                                        StringComparison.OrdinalIgnoreCase));
             ModelDiscoveryStatusText.Text = suiXiangDiscovery
                 ? F(
-                    "已发现 {0} 个随想模型；选择 k3 使用实验适配器，其他模型直接走随想 Responses。",
-                    "Discovered {0} SuiXiang models; choose k3 for the experimental adapter, or use direct SuiXiang Responses for other models.",
+                    "已发现 {0} 个可用的随想 OpenAI 模型。",
+                    "Discovered {0} available SuiXiang OpenAI models.",
                     models.Count)
                 : currentIsListed || currentModel.Length == 0
                 ? F(
@@ -3045,6 +3041,7 @@ public partial class MainWindow : Window
 
     private static void ValidateKimiModel(string model)
     {
+        ProviderAvailabilityPolicy.RequireKimiRouteEnabled();
         if (!string.Equals(
                 model.Trim(),
                 AppPaths.DefaultKimiModel,
@@ -3241,36 +3238,43 @@ public partial class MainWindow : Window
 
     private void UpdateKimiUi()
     {
-        var kimi = IsKimiModelSelection();
-        KimiExperimentalNoticeText.Visibility = kimi
+        var retiredSelection = IsKimiModelSelection();
+        var retiredCurrentRoute = _lastConfigStatus is { } status &&
+                                  (SettingsStore.IsKimiLoopbackBaseUrl(status.BaseUrl) ||
+                                   string.Equals(
+                                       status.ModelCatalogJson,
+                                       AppPaths.KimiModelCatalogFileName,
+                                       StringComparison.Ordinal));
+        var showRetiredNotice = retiredSelection || retiredCurrentRoute;
+        KimiExperimentalNoticeText.Visibility = showRetiredNotice
             ? Visibility.Visible
             : Visibility.Collapsed;
-        // Keep this editable while a K3 profile is active so the user can
-        // choose a normal SuiXiang/OpenAI model and leave the experimental
-        // bridge without first switching through official Codex.
+        // Keep the model editable so a legacy K3 user can select an available
+        // SuiXiang/OpenAI model and leave the retired route.
         ModelComboBox.IsEditable = true;
-        KimiExperimentalNoticeText.Text = T(
-            "随想 K3 实验线路仅支持 k3：先检查 WSL 路由器，再测试随想上游 Chat Completions；Codex 实际通过本机 loopback Responses 路由。当前不承诺图片、Remote 或 Codex 原生插件能力。",
-            "The SuiXiang K3 experimental route supports only k3: the WSL router is checked first, then the SuiXiang Chat Completions upstream; Codex uses the local loopback Responses route. Images, Remote, and native Codex plugin capabilities are not promised.");
-        SwitchThirdPartyButton.Content = kimi
-            ? T("切换到随想 K3", "Switch to SuiXiang K3")
-            : T("切换到第三方", "Switch to third-party");
-        TestConnectionButton.Content = kimi
-            ? T("测试随想 K3", "Test SuiXiang K3")
-            : T("测试 Responses 兼容性", "Test Responses compatibility");
+        KimiExperimentalNoticeText.Text = retiredCurrentRoute
+            ? T(
+                "当前仍是旧 K3 配置，该线路已停用。请切换到官方 Codex，或改用随想当前支持的 OpenAI 模型；旧配置、聊天记录和密钥不会被删除。",
+                "The current configuration still uses the retired K3 route. Switch to Official Codex or a currently supported SuiXiang OpenAI model; existing configuration, chat history, and credentials are not deleted.")
+            : T(
+                "K3 线路已停用，不再支持新建、测试或切换。请改用官方 Codex 或其他可用模型。",
+                "The K3 route has been retired and can no longer be created, tested, or selected. Use Official Codex or another available model.");
+        SwitchThirdPartyButton.Content = T("切换到第三方", "Switch to third-party");
+        TestConnectionButton.Content = T(
+            "测试 Responses 兼容性",
+            "Test Responses compatibility");
+        SaveKeyButton.IsEnabled = !_isBusy && !retiredSelection;
+        DeleteKeyButton.IsEnabled = !_isBusy && !retiredSelection;
+        TestConnectionButton.IsEnabled = !_isBusy && !retiredSelection;
+        SwitchThirdPartyButton.IsEnabled = !_isBusy && !retiredSelection;
+        RefreshModelsButton.IsEnabled = !_isBusy;
     }
 
     private bool IsKimiModelSelection()
     {
-        if (!SettingsStore.IsKimiBaseUrl(BaseUrlTextBox.Text))
-        {
-            return false;
-        }
-
-        return string.Equals(
-            ModelComboBox.Text.Trim(),
-            AppPaths.DefaultKimiModel,
-            StringComparison.Ordinal);
+        return ProviderAvailabilityPolicy.IsRetiredKimiRoute(
+            BaseUrlTextBox.Text,
+            ModelComboBox.Text);
     }
 
     private void ClearCurrentToolTestResult()
@@ -3309,25 +3313,6 @@ public partial class MainWindow : Window
     private static bool IsSuiXiangBaseUrl(string baseUrl) =>
         Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) &&
         uri.Host.Equals("sui-xiang.com", StringComparison.OrdinalIgnoreCase);
-
-    private async Task RestartIfRequestedAsync()
-    {
-        if (!_settings.RestartAfterSwitch)
-        {
-            OperationStatusText.Text += T(
-                " 请手动重启 Codex 后生效。",
-                " Restart Codex manually to apply the change.");
-            return;
-        }
-
-        OperationStatusText.Text += T(
-            " 正在重启 Codex…",
-            " Restarting Codex...");
-        await _processService.RestartAsync();
-        OperationStatusText.Text += T(
-            " Codex 已重新启动。",
-            " Codex restarted.");
-    }
 
     private void UpdateModeBadge(ConfigStatus status)
     {
@@ -3381,15 +3366,16 @@ public partial class MainWindow : Window
     {
         _isBusy = busy;
         var lunaRouteStatus = _configService.ReadStatus();
-        SaveKeyButton.IsEnabled = !busy;
-        DeleteKeyButton.IsEnabled = !busy;
-        TestConnectionButton.IsEnabled = !busy;
+        var retiredKimiSelection = IsKimiModelSelection();
+        SaveKeyButton.IsEnabled = !busy && !retiredKimiSelection;
+        DeleteKeyButton.IsEnabled = !busy && !retiredKimiSelection;
+        TestConnectionButton.IsEnabled = !busy && !retiredKimiSelection;
         RefreshCapabilitiesButton.IsEnabled = !busy;
         TestToolCallingButton.IsEnabled = !busy;
         TestImageGenerationButton.IsEnabled = !busy;
         OpenGeneratedImageButton.IsEnabled = !busy && HasGeneratedImage();
         OpenRemoteSettingsButton.IsEnabled = !busy;
-        SwitchThirdPartyButton.IsEnabled = !busy;
+        SwitchThirdPartyButton.IsEnabled = !busy && !retiredKimiSelection;
         SwitchOfficialButton.IsEnabled = !busy;
         DailyPrimaryActionButton.IsEnabled = !busy;
         HeaderRefreshButton.IsEnabled = !busy;
@@ -3404,7 +3390,7 @@ public partial class MainWindow : Window
         NewProviderProfileButton.IsEnabled = !busy;
         RefreshModelsButton.IsEnabled = !busy;
         ApiKeyPasswordBox.IsEnabled = !busy;
-        RestartCheckBox.IsEnabled = !busy;
+        RestartCheckBox.IsEnabled = false;
         RefreshBackupsButton.IsEnabled = !busy;
         OpenBackupFolderButton.IsEnabled = !busy;
         OpenSelectedBackupButton.IsEnabled =
@@ -3505,8 +3491,8 @@ public partial class MainWindow : Window
             "添加一个独立的 API Key；输入并保存密钥或成功切换后才会建立账号。",
             "Add an independent API key. The account is created only after the key is saved or a switch succeeds.");
         KimiExperimentalNoticeText.Text = T(
-            "随想 K3 实验线路仅支持 k3：先检查 WSL 路由器，再测试随想上游 Chat Completions；Codex 实际通过本机 loopback Responses 路由。当前不承诺图片、Remote 或 Codex 原生插件能力。",
-            "The SuiXiang K3 experimental route supports only k3: the WSL router is checked first, then the SuiXiang Chat Completions upstream; Codex uses the local loopback Responses route. Images, Remote, and native Codex plugin capabilities are not promised.");
+            "K3 线路已停用。旧配置、聊天记录和密钥会保留，请切换到官方 Codex 或其他可用线路。",
+            "The K3 route has been retired. Existing configuration, chat history, and credentials are preserved; switch to Official Codex or another available route.");
         KeyStorageDescriptionText.Text = T(
             "密钥保存在 Windows 凭据管理器；不会写进 config.toml、源码或日志。",
             "The key is stored in Windows Credential Manager and is never written to config.toml, source code, or logs.");
@@ -3565,11 +3551,11 @@ public partial class MainWindow : Window
         SwitchOfficialButton.Content = T("切换到官方", "Switch to official");
 
         RestartTitleText.Text = T(
-            "切换后自动重启 Codex",
-            "Restart Codex automatically after switching");
+            "切换时重启 Codex",
+            "Codex restarts during a switch");
         RestartDescriptionText.Text = T(
-            "重启会中断正在运行的 Codex 任务。配置写入前会自动生成备份。",
-            "Restarting interrupts active Codex tasks. A backup is created before the configuration is written.");
+            "为让新线路和模型目录立即生效，切换会固定停止、写入并校验配置后再启动 Codex。这会中断正在运行的任务；写入前会生成备份。",
+            "To apply the new route and model catalog immediately, every switch stops Codex, writes and verifies the configuration, then starts Codex. This interrupts active tasks; a backup is created before the write.");
 
         BackupsLeadText.Text = T(
             "每次切换前创建的 config.toml 备份副本。",
@@ -3659,7 +3645,7 @@ public partial class MainWindow : Window
 
     private static Version CurrentApplicationVersion() =>
         GitHubReleaseUpdateService.NormalizeVersion(
-            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 4, 2));
+            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 4, 3));
 
     private Brush ResourceBrush(string key) =>
         (Brush)FindResource(key);

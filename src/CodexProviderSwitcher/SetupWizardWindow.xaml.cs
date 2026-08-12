@@ -80,7 +80,7 @@ public partial class SetupWizardWindow : Window
     {
         _settings = settings;
         _draft = draft;
-        _selectedProviderKind = draft?.ProviderKind is ProviderKinds.SuiXiang or ProviderKinds.Kimi
+        _selectedProviderKind = draft?.ProviderKind is ProviderKinds.SuiXiang
             ? draft.ProviderKind
             : ProviderKinds.Custom;
         _isSuiXiangChoice = _selectedProviderKind == ProviderKinds.SuiXiang;
@@ -135,10 +135,9 @@ public partial class SetupWizardWindow : Window
 
     private void KimiChoiceButton_Click(object sender, RoutedEventArgs e)
     {
-        _isSuiXiangChoice = false;
-        _selectedProviderKind = ProviderKinds.Kimi;
-        PrepareProviderDetails();
-        ShowPage(WizardPage.ProviderDetails);
+        SetWizardStatus(
+            "K3 线路已停用，请选择官方 Codex、随想 OpenAI 或其他服务。",
+            "The K3 route has been retired. Choose Official Codex, SuiXiang OpenAI, or another service.");
     }
 
     private void CustomChoiceButton_Click(object sender, RoutedEventArgs e)
@@ -246,6 +245,10 @@ public partial class SetupWizardWindow : Window
             var models = result.Models
                 .Where(model => !string.IsNullOrWhiteSpace(model))
                 .Select(model => model.Trim())
+                .Where(model =>
+                    !ProviderAvailabilityPolicy.IsRetiredKimiRoute(
+                        normalizedBaseUrl,
+                        model))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
             var kimiDiscovery = _selectedProviderKind == ProviderKinds.Kimi &&
@@ -486,6 +489,14 @@ public partial class SetupWizardWindow : Window
         var baseUrl = WizardBaseUrlTextBox.Text.Trim();
         var model = WizardModelComboBox.Text.Trim();
         var apiKey = WizardApiKeyPasswordBox.Password.Trim();
+        if (_selectedProviderKind == ProviderKinds.Kimi ||
+            ProviderAvailabilityPolicy.IsRetiredKimiRoute(baseUrl, model))
+        {
+            SetWizardStatus(
+                "K3 线路已停用，请选择官方 Codex、随想 OpenAI 或其他模型。",
+                "The K3 route has been retired. Choose Official Codex, SuiXiang OpenAI, or another model.");
+            return;
+        }
         string? normalizedBaseUrl = null;
         try
         {
@@ -625,6 +636,9 @@ public partial class SetupWizardWindow : Window
                 : "Refresh the model list, or enter a custom model ID directly.");
 
         var profile = _settings.ActiveProviderProfile;
+        var availableProfile = ProviderAvailabilityPolicy.IsRetiredKimiProfile(profile)
+            ? null
+            : profile;
         var draft = _draft;
         var draftMatchesChoice =
             draft is { UseOfficial: false } &&
@@ -660,13 +674,13 @@ public partial class SetupWizardWindow : Window
         {
             ProviderNameTextBox.Text = draftMatchesChoice
                 ? draft!.DisplayName
-                : profile?.DisplayName ?? string.Empty;
+                : availableProfile?.DisplayName ?? string.Empty;
             WizardBaseUrlTextBox.Text = draftMatchesChoice
                 ? draft!.BaseUrl
-                : profile?.BaseUrl ?? string.Empty;
+                : availableProfile?.BaseUrl ?? string.Empty;
             WizardModelComboBox.Text = draftMatchesChoice
                 ? draft!.Model
-                : profile?.Model ?? string.Empty;
+                : availableProfile?.Model ?? string.Empty;
         }
 
         if (draftMatchesChoice && draft?.ApiKey is { Length: > 0 })
