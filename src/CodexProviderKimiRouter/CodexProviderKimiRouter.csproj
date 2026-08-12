@@ -4,7 +4,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <AssemblyName>CodexProviderKimiRouter</AssemblyName>
     <RootNamespace>CodexProviderKimiRouter</RootNamespace>
-    <Version>1.4.1</Version>
+    <Version>1.4.2</Version>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
     <!-- The WSL adapter must start on lean distributions that do not ship

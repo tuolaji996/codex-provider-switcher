@@ -323,6 +323,50 @@ catch (InvalidOperationException exception)
         "The malformed credential error was not safely redacted.");
 }
 
+var kimiChatProbeHandler = new ProtocolProbeHttpMessageHandler(
+    """
+    {"id":"chat-k3-probe","choices":[{"message":{"role":"assistant","content":"OK"}}]}
+    """,
+    "application/json");
+var kimiChatProbe = new ConnectionTestService(
+    new HttpClient(kimiChatProbeHandler));
+var kimiChatResult = await kimiChatProbe.TestChatCompletionsApiAsync(
+    AppPaths.KimiUpstreamBaseUrl,
+    AppPaths.DefaultKimiModel,
+    "k3-probe-key");
+Check(
+    kimiChatResult.Success &&
+    kimiChatProbeHandler.Method == HttpMethod.Post &&
+    kimiChatProbeHandler.RequestUri?.AbsolutePath == "/v1/chat/completions" &&
+    kimiChatProbeHandler.AuthorizationScheme == "Bearer" &&
+    kimiChatProbeHandler.AuthorizationParameter == "k3-probe-key" &&
+    kimiChatProbeHandler.RequestBody?.Contains("\"model\":\"k3\"", StringComparison.Ordinal) == true,
+    "The K3 compatibility probe did not use the upstream Chat Completions contract.");
+
+var directResponsesProbeHandler = new ProtocolProbeHttpMessageHandler(
+    """
+    data: {"type":"response.created","response":{"id":"resp-direct-probe","status":"in_progress"}}
+
+    data: {"type":"response.output_text.delta","delta":"OK"}
+
+    data: {"type":"response.completed","response":{"id":"resp-direct-probe","status":"completed"}}
+
+    data: [DONE]
+
+    """,
+    "text/event-stream");
+var directResponsesProbe = new ConnectionTestService(
+    new HttpClient(directResponsesProbeHandler));
+var directResponsesResult = await directResponsesProbe.TestResponsesApiAsync(
+    AppPaths.KimiUpstreamBaseUrl,
+    "gpt-5.6-sol",
+    "direct-probe-key");
+Check(
+    directResponsesResult.Success &&
+    directResponsesProbeHandler.Method == HttpMethod.Post &&
+    directResponsesProbeHandler.RequestUri?.AbsolutePath == "/v1/responses",
+    "The direct SuiXiang compatibility probe did not use the Responses contract.");
+
 var languageSettingsJson = JsonSerializer.Serialize(
     new SwitcherSettings
     {
@@ -1353,6 +1397,31 @@ try
         !SettingsStore.IsKimiBaseUrl("https://sui-xiang.com/v1?target=other") &&
         SettingsStore.IsKimiLoopbackBaseUrl(AppPaths.KimiRouterBaseUrl),
         "Kimi URL recognition accepted a deceptive host or rejected loopback routing.");
+
+    var directRouteProfile = new ProviderProfile
+    {
+        Kind = ProviderKinds.SuiXiang,
+        BaseUrl = "https://sui-xiang.com/v1/",
+        Model = "gpt-5.6-sol"
+    };
+    var secondKimiRouteProfile = new ProviderProfile
+    {
+        Kind = ProviderKinds.Kimi,
+        BaseUrl = "https://sui-xiang.com/v1/",
+        Model = AppPaths.DefaultKimiModel
+    };
+    Check(
+        ProviderProfileRouteMatcher.FindExact(
+            [directRouteProfile, kimiProfile],
+            AppPaths.KimiUpstreamBaseUrl,
+            AppPaths.DefaultKimiModel,
+            ProviderKinds.Kimi).Single().Id == kimiProfile.Id &&
+        ProviderProfileRouteMatcher.FindExact(
+            [kimiProfile, secondKimiRouteProfile],
+            AppPaths.KimiUpstreamBaseUrl,
+            AppPaths.DefaultKimiModel,
+            ProviderKinds.Kimi).Count == 2,
+        "Provider route matching did not isolate direct SuiXiang and duplicate K3 accounts.");
 }
 finally
 {
@@ -1398,6 +1467,35 @@ var incompleteStream = ConnectionTestService.AnalyzeSse(
 Check(incompleteStream.SawJsonEvent, "Incomplete SSE did not report its JSON event.");
 Check(!incompleteStream.Completed, "Incomplete SSE was incorrectly classified as completed.");
 Check(incompleteStream.Failed, "Explicit response.incomplete SSE was not classified as failed.");
+
+var failedStream = ConnectionTestService.AnalyzeSse(
+    """
+    data: {"type":"response.failed","response":{"id":"resp_failed","status":"failed","error":{"code":"upstream_http_error","message":"The upstream returned HTTP 503."}}}
+
+    """);
+Check(failedStream.Failed, "Explicit response.failed SSE was not classified as failed.");
+Check(
+    failedStream.Error == "The upstream returned HTTP 503.",
+    "Nested response.failed error details were not preserved.");
+
+var topLevelFailedStream = ConnectionTestService.AnalyzeSse(
+    """
+    data: {"type":"response.failed","code":"upstream_timeout","message":"The upstream timed out."}
+
+    """);
+Check(
+    topLevelFailedStream.Error == "The upstream timed out.",
+    "Top-level response.failed error details were not preserved.");
+
+var untypedErrorStream = ConnectionTestService.AnalyzeSse(
+    """
+    data: {"error":{"message":"","code":"upstream_overloaded"}}
+
+    """);
+Check(untypedErrorStream.Failed, "An untyped top-level error object was not classified as failed.");
+Check(
+    untypedErrorStream.Error == "upstream_overloaded",
+    "A blank error message did not fall back to the provider error code.");
 
 var functionCallStream = ConnectionTestService.AnalyzeSse(
     """
@@ -2084,5 +2182,38 @@ sealed class StubHttpMessageHandler(
                 "application/json"),
             RequestMessage = request
         });
+    }
+}
+
+sealed class ProtocolProbeHttpMessageHandler(
+    string responseBody,
+    string mediaType) : HttpMessageHandler
+{
+    public Uri? RequestUri { get; private set; }
+
+    public HttpMethod? Method { get; private set; }
+
+    public string? AuthorizationScheme { get; private set; }
+
+    public string? AuthorizationParameter { get; private set; }
+
+    public string? RequestBody { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        RequestUri = request.RequestUri;
+        Method = request.Method;
+        AuthorizationScheme = request.Headers.Authorization?.Scheme;
+        AuthorizationParameter = request.Headers.Authorization?.Parameter;
+        RequestBody = request.Content is null
+            ? null
+            : await request.Content.ReadAsStringAsync(cancellationToken);
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responseBody, Encoding.UTF8, mediaType),
+            RequestMessage = request
+        };
     }
 }

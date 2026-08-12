@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [1.4.2] - 2026-08-11
+
+### Fixed
+
+- The Providers compatibility check now recognizes the SuiXiang K3 bridge:
+  it checks the WSL-local router and the upstream Chat Completions contract
+  instead of sending an unsupported `/responses` request directly to SuiXiang.
+- Terminal Responses failures now preserve a top-level or nested error message
+  when a relay includes one, and report a specific fallback when it does not.
+- Editing a saved account's endpoint/model no longer mutates the original K3
+  profile; an exact saved endpoint/model match is reused, otherwise a new key
+  is required for the new profile.
+- Guided setup and model discovery now identify accounts by the complete route
+  (`Base URL` + model + adapter kind). A blank K3 key is reused only for one
+  exact K3 account; direct SuiXiang and duplicate K3 accounts are never chosen
+  implicitly.
+
 ## [1.4.1] - 2026-08-11
 
 ### Added
