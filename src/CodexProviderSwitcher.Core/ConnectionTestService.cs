@@ -38,6 +38,7 @@ public sealed partial class ConnectionTestService
         string apiKey,
         CancellationToken cancellationToken = default)
     {
+        ProviderAvailabilityPolicy.RequireAvailableThirdPartyRoute(baseUrl, model);
         var payload = new
         {
             model = model.Trim(),
@@ -104,6 +105,7 @@ public sealed partial class ConnectionTestService
         string apiKey,
         CancellationToken cancellationToken = default)
     {
+        ProviderAvailabilityPolicy.RequireKimiRouteEnabled();
         var payload = new
         {
             model = model.Trim(),
@@ -173,6 +175,7 @@ public sealed partial class ConnectionTestService
         string apiKey,
         CancellationToken cancellationToken = default)
     {
+        ProviderAvailabilityPolicy.RequireAvailableThirdPartyRoute(baseUrl, model);
         var tool = new
         {
             type = "function",

@@ -63,6 +63,63 @@ public static class ProviderKinds
     public const string Custom = "custom";
 }
 
+/// <summary>
+/// Central availability policy for routes retained only for recovery. Retired
+/// profiles and credentials stay intact so users can switch away safely.
+/// </summary>
+public static class ProviderAvailabilityPolicy
+{
+    public const bool KimiRouteEnabled = false;
+
+    public static bool IsKimiModel(string? model) =>
+        string.Equals(
+            model?.Trim(),
+            AppPaths.DefaultKimiModel,
+            StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsRetiredKimiRoute(string? baseUrl, string? model)
+    {
+        if (KimiRouteEnabled || !IsKimiModel(model))
+        {
+            return false;
+        }
+
+        try
+        {
+            return SettingsStore.IsKimiBaseUrl(baseUrl);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    public static bool IsRetiredKimiProfile(ProviderProfile? profile) =>
+        profile is not null &&
+        (string.Equals(profile.Kind, ProviderKinds.Kimi, StringComparison.Ordinal) ||
+         IsRetiredKimiRoute(profile.BaseUrl, profile.Model));
+
+    public static void RequireAvailableThirdPartyRoute(string? baseUrl, string? model)
+    {
+        if (IsRetiredKimiRoute(baseUrl, model))
+        {
+            throw new InvalidOperationException(Localizer.Text(
+                "K3 线路已停用，不再支持新建、测试或切换。请选择官方 Codex 或随想当前支持的 OpenAI 模型。",
+                "The K3 route has been retired and can no longer be created, tested, or selected. Choose Official Codex or a currently supported SuiXiang OpenAI model."));
+        }
+    }
+
+    public static void RequireKimiRouteEnabled()
+    {
+        if (!KimiRouteEnabled)
+        {
+            throw new InvalidOperationException(Localizer.Text(
+                "K3 线路已停用。旧配置和密钥会保留，请切换到官方 Codex 或其他可用线路。",
+                "The K3 route has been retired. Existing configuration and credentials are preserved; switch to Official Codex or another available route."));
+        }
+    }
+}
+
 public sealed class ProviderProfile
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");

@@ -295,10 +295,12 @@
                             HorizontalContentAlignment="Left"
                             Padding="16,13"
                             Margin="0,0,0,10"
+                            Visibility="Collapsed"
                             Click="KimiChoiceButton_Click" />
                     <TextBlock x:Name="KimiChoiceDescriptionText"
                                Text="使用随想 API Key，经本机兼容路由器接入 Codex Responses。"
                                Style="{StaticResource PageLeadStyle}"
+                               Visibility="Collapsed"
                                Margin="16,-4,16,16" />
                     <Button x:Name="CustomChoiceButton"
                             Content="使用其他服务"

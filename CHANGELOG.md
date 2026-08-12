@@ -2,6 +2,35 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+## [1.4.3] - 2026-08-12
+
+### Changed
+
+- The experimental SuiXiang K3 route is retired and hidden from guided setup,
+  model discovery, and the saved-account picker. Core validation also rejects
+  new K3 tests, configuration generation, and provider switches before any
+  network request or configuration write.
+- Existing K3 profiles and Windows Credential Manager entries are preserved but
+  hidden. A legacy K3 configuration is detected with bilingual guidance and can
+  still be switched safely to official OpenAI or a supported direct provider.
+- Every provider change now uses one ordered transaction: stop Codex, write and
+  verify `config.toml`, then start Codex and wait for the desktop app-server to
+  report readiness. The former optional restart control is now a read-only
+  safety boundary.
+
+### Fixed
+
+- Switching away from a legacy K3 configuration now reliably clears the
+  loopback URL and managed model catalog before Codex restarts, preventing a
+  restored app-server from continuing to send direct-provider models to the
+  retired router.
+- The bundled legacy adapter now maps namespaced Codex tool names to legal,
+  collision-safe Chat Completions names and restores the original names in its
+  responses. This is retained only for upgrade and recovery of existing K3
+  configurations; it does not re-enable K3 in the application.
+
 ## [1.4.2] - 2026-08-11
 
 ### Fixed

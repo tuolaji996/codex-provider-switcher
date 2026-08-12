@@ -131,7 +131,7 @@ public sealed class ModelDiscoveryService
                     statusCode);
             }
 
-            return ParseBody(body, statusCode);
+            return ParseBody(body, statusCode, baseUrl);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -202,7 +202,10 @@ public sealed class ModelDiscoveryService
         }
     }
 
-    private static ModelDiscoveryResult ParseBody(string body, int statusCode)
+    private static ModelDiscoveryResult ParseBody(
+        string body,
+        int statusCode,
+        string baseUrl)
     {
         try
         {
@@ -246,6 +249,13 @@ public sealed class ModelDiscoveryService
 
                 var modelId = id.GetString()?.Trim() ?? string.Empty;
                 if (modelId.Length == 0)
+                {
+                    continue;
+                }
+
+                // Retired routes must not reappear through a provider's live
+                // catalog even if a UI caller forgets to filter suggestions.
+                if (ProviderAvailabilityPolicy.IsRetiredKimiRoute(baseUrl, modelId))
                 {
                     continue;
                 }

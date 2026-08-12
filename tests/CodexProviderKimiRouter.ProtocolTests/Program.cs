@@ -80,6 +80,332 @@ using (var replayDocument = JsonDocument.Parse(
         "Custom-tool replay did not preserve its reversible input wrapper.");
 }
 
+var namespacedToolsRequestJson = """
+{
+  "input":[
+    {"type":"function_call","call_id":"call_old","name":"functions.exec","arguments":"{\"cmd\":\"pwd\"}"},
+    {"type":"function_call_output","call_id":"call_old","output":"/workspace"},
+    {"role":"assistant","content":null,"tool_calls":[
+      {"id":"call_existing","type":"function","function":{"name":"github:github","arguments":"{}"}}
+    ]}
+  ],
+  "tool_choice":{"type":"function","name":"collaboration.spawn_agent"},
+  "tools":[
+    {"type":"function","name":"functions.exec","parameters":{"type":"object"}},
+    {"type":"function","name":"functions_exec","parameters":{"type":"object"}},
+    {"type":"function","name":"collaboration.spawn_agent","parameters":{"type":"object"}},
+    {"type":"function","name":"github:github","parameters":{"type":"object"}},
+    {"type":"custom","name":"plugin:apply.patch","format":{"type":"text"}}
+  ]
+}
+""";
+KimiToolNameMap namespacedToolMap;
+using (var namespacedRequestDocument = JsonDocument.Parse(namespacedToolsRequestJson))
+{
+    var mappedRequest = KimiResponsesTranslator.BuildChatCompletionsRequest(
+        namespacedRequestDocument.RootElement,
+        out namespacedToolMap);
+    using var mappedDocument = JsonDocument.Parse(mappedRequest.ToJsonString());
+    var mappedRoot = mappedDocument.RootElement;
+    var mappedNames = mappedRoot.GetProperty("tools")
+        .EnumerateArray()
+        .Select(tool => tool.GetProperty("function").GetProperty("name").GetString() ?? string.Empty)
+        .ToArray();
+    Check(mappedNames.Distinct(StringComparer.Ordinal).Count() == mappedNames.Length,
+        "Namespaced tool normalization produced a collision.");
+    Check(mappedNames.All(name =>
+            name.Length is > 0 and <= 64 &&
+            char.IsAsciiLetter(name[0]) &&
+            name.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-')),
+        "A namespaced tool name was not normalized to the K3 Chat Completions contract.");
+    Check(namespacedToolMap.ToUpstream("functions.exec") != "functions.exec" &&
+        namespacedToolMap.ToUpstream("github:github") != "github:github" &&
+        namespacedToolMap.ToUpstream("functions_exec") == "functions_exec",
+        "Dot and colon names were not mapped while a valid name was unexpectedly changed.");
+    Check(
+        mappedRoot.GetProperty("tool_choice").GetProperty("function").GetProperty("name").GetString() ==
+        namespacedToolMap.ToUpstream("collaboration.spawn_agent"),
+        "A forced namespaced tool choice did not use the same upstream name mapping.");
+    Check(mappedRoot.GetProperty("messages")[0].GetProperty("tool_calls")[0]
+            .GetProperty("function").GetProperty("name").GetString() ==
+        namespacedToolMap.ToUpstream("functions.exec"),
+        "A replayed Responses tool call was not mapped for K3.");
+    Check(mappedRoot.GetProperty("messages")[2].GetProperty("tool_calls")[0]
+            .GetProperty("function").GetProperty("name").GetString() ==
+        namespacedToolMap.ToUpstream("github:github"),
+        "An existing assistant tool call was not mapped for K3.");
+}
+
+var namespacedToolCompletion = new JsonObject
+{
+    ["id"] = "chat-namespaced-tool",
+    ["choices"] = new JsonArray
+    {
+        new JsonObject
+        {
+            ["message"] = new JsonObject
+            {
+                ["role"] = "assistant",
+                ["content"] = null,
+                ["tool_calls"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["id"] = "call_exec",
+                        ["type"] = "function",
+                        ["function"] = new JsonObject
+                        {
+                            ["name"] = namespacedToolMap.ToUpstream("functions.exec"),
+                            ["arguments"] = "{\"cmd\":\"pwd\"}"
+                        }
+                    }
+                }
+            },
+            ["finish_reason"] = "tool_calls"
+        }
+    }
+}.ToJsonString();
+using (var historyDocument = JsonDocument.Parse(namespacedToolCompletion))
+{
+    var assistantHistory = KimiResponsesTranslator.BuildAssistantMessageForHistory(historyDocument.RootElement);
+    Check(assistantHistory?["tool_calls"]?[0]?["function"]?["name"]?.GetValue<string>() ==
+        namespacedToolMap.ToUpstream("functions.exec"),
+        "Cached non-streaming history did not retain the legal upstream tool name.");
+}
+
+using (var namespacedToolResponse = JsonDocument.Parse(
+           KimiResponsesTranslator.TranslateNonStreaming(
+               namespacedToolCompletion,
+               "k3",
+               null,
+               null,
+               toolNameMap: namespacedToolMap)))
+{
+    Check(namespacedToolResponse.RootElement.GetProperty("output")[0].GetProperty("name").GetString() ==
+        "functions.exec",
+        "A non-streaming K3 tool call did not restore the original Codex tool name.");
+}
+
+var namespacedStreamChunk = new JsonObject
+{
+    ["id"] = "chat-namespaced-stream",
+    ["choices"] = new JsonArray
+    {
+        new JsonObject
+        {
+            ["index"] = 0,
+            ["delta"] = new JsonObject
+            {
+                ["tool_calls"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["index"] = 0,
+                        ["id"] = "call_exec",
+                        ["function"] = new JsonObject
+                        {
+                            ["name"] = namespacedToolMap.ToUpstream("functions.exec"),
+                            ["arguments"] = "{\"cmd\":\"pwd\"}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}.ToJsonString();
+var namespacedStreamFixture = $"data: {namespacedStreamChunk}\n\ndata: [DONE]\n\n";
+var namespacedTranslatedStream = KimiResponsesTranslator.TranslateStreaming(
+    namespacedStreamFixture,
+    "k3",
+    null,
+    null,
+    toolNameMap: namespacedToolMap);
+Check(namespacedTranslatedStream.Contains("\"name\":\"functions.exec\"", StringComparison.Ordinal) &&
+    !namespacedTranslatedStream.Contains(
+        $"\"name\":\"{namespacedToolMap.ToUpstream("functions.exec")}\"",
+        StringComparison.Ordinal),
+    "A streaming K3 tool call did not restore the original Codex tool name.");
+
+var lateNamespacedStreamChunkOne = new JsonObject
+{
+    ["choices"] = new JsonArray
+    {
+        new JsonObject
+        {
+            ["delta"] = new JsonObject
+            {
+                ["tool_calls"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["index"] = 0,
+                        ["id"] = "call_late_exec",
+                        ["function"] = new JsonObject { ["arguments"] = "{\"cmd\":" }
+                    }
+                }
+            }
+        }
+    }
+}.ToJsonString();
+var lateNamespacedStreamChunkTwo = new JsonObject
+{
+    ["choices"] = new JsonArray
+    {
+        new JsonObject
+        {
+            ["delta"] = new JsonObject
+            {
+                ["tool_calls"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["index"] = 0,
+                        ["function"] = new JsonObject
+                        {
+                            ["name"] = namespacedToolMap.ToUpstream("functions.exec"),
+                            ["arguments"] = "\"pwd\"}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}.ToJsonString();
+var lateNamespacedTranslatedStream = KimiResponsesTranslator.TranslateStreaming(
+    $"data: {lateNamespacedStreamChunkOne}\n\ndata: {lateNamespacedStreamChunkTwo}\n\ndata: [DONE]\n\n",
+    "k3",
+    null,
+    null,
+    toolNameMap: namespacedToolMap);
+Check(lateNamespacedTranslatedStream.Contains("\"name\":\"functions.exec\"", StringComparison.Ordinal) &&
+    lateNamespacedTranslatedStream.Contains("pwd", StringComparison.Ordinal) &&
+    !lateNamespacedTranslatedStream.Contains("event: response.failed", StringComparison.Ordinal),
+    "A namespaced tool whose name arrived after its first stream chunk was rejected or not restored.");
+
+var customNamespacedToolCompletion = new JsonObject
+{
+    ["id"] = "chat-namespaced-custom",
+    ["choices"] = new JsonArray
+    {
+        new JsonObject
+        {
+            ["message"] = new JsonObject
+            {
+                ["role"] = "assistant",
+                ["tool_calls"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["id"] = "call_custom",
+                        ["type"] = "function",
+                        ["function"] = new JsonObject
+                        {
+                            ["name"] = namespacedToolMap.ToUpstream("plugin:apply.patch"),
+                            ["arguments"] = "{\"input\":\"*** Begin Patch\"}"
+                        }
+                    }
+                }
+            },
+            ["finish_reason"] = "tool_calls"
+        }
+    }
+}.ToJsonString();
+using (var customNamespacedToolResponse = JsonDocument.Parse(
+           KimiResponsesTranslator.TranslateNonStreaming(
+               customNamespacedToolCompletion,
+               "k3",
+               null,
+               new[] { "plugin:apply.patch" },
+               toolNameMap: namespacedToolMap)))
+{
+    var customItem = customNamespacedToolResponse.RootElement.GetProperty("output")[0];
+    Check(customItem.GetProperty("type").GetString() == "custom_tool_call" &&
+        customItem.GetProperty("name").GetString() == "plugin:apply.patch" &&
+        customItem.GetProperty("input").GetString() == "*** Begin Patch",
+        "A custom namespaced tool call did not round-trip through the K3 function wrapper.");
+}
+
+var unknownMappedToolCompletion = """
+{
+  "id":"chat-unknown-tool",
+  "choices":[{"message":{"role":"assistant","tool_calls":[
+    {"id":"call_unknown","type":"function","function":{"name":"not_registered","arguments":"{}"}}
+  ]},"finish_reason":"tool_calls"}]
+}
+""";
+try
+{
+    _ = KimiResponsesTranslator.TranslateNonStreaming(
+        unknownMappedToolCompletion,
+        "k3",
+        null,
+        null,
+        toolNameMap: namespacedToolMap);
+    Check(false, "An unknown upstream tool name did not fail closed in non-streaming translation.");
+}
+catch (UnknownKimiMappedToolNameException)
+{
+}
+
+var unknownMappedToolStream = KimiResponsesTranslator.TranslateStreaming(
+    "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"not_registered\",\"arguments\":\"{}\"}}]}}]}\n\ndata: [DONE]\n\n",
+    "k3",
+    null,
+    null,
+    toolNameMap: namespacedToolMap);
+Check(unknownMappedToolStream.Contains("event: response.failed", StringComparison.Ordinal) &&
+    unknownMappedToolStream.Contains("upstream_protocol_error", StringComparison.Ordinal) &&
+    !unknownMappedToolStream.Contains("event: response.completed", StringComparison.Ordinal),
+    "An unknown upstream tool name did not fail closed in streaming translation.");
+
+var longName = "a" + new string('x', 80) + ".tool";
+var reversedNamespacedToolsRequestJson = """
+{
+  "tools":[
+    {"type":"custom","name":"plugin:apply.patch"},
+    {"type":"function","name":"github:github","parameters":{"type":"object"}},
+    {"type":"function","name":"collaboration.spawn_agent","parameters":{"type":"object"}},
+    {"type":"function","name":"functions_exec","parameters":{"type":"object"}},
+    {"type":"function","name":"functions.exec","parameters":{"type":"object"}}
+  ]
+}
+""";
+using (var reversedNamespacedToolsDocument = JsonDocument.Parse(reversedNamespacedToolsRequestJson))
+{
+    var reversedMap = KimiToolNameMap.Create(reversedNamespacedToolsDocument.RootElement);
+    foreach (var originalName in new[]
+             {
+                 "functions.exec",
+                 "functions_exec",
+                 "collaboration.spawn_agent",
+                 "github:github",
+                 "plugin:apply.patch"
+             })
+    {
+        Check(reversedMap.ToUpstream(originalName) == namespacedToolMap.ToUpstream(originalName),
+            "Tool-name mapping changed when the tool declaration order changed.");
+    }
+}
+
+var longNameRequest = new JsonObject
+{
+    ["tools"] = new JsonArray
+    {
+        new JsonObject
+        {
+            ["type"] = "function",
+            ["name"] = longName,
+            ["parameters"] = new JsonObject { ["type"] = "object" }
+        }
+    }
+}.ToJsonString();
+using (var longNameDocument = JsonDocument.Parse(longNameRequest))
+{
+    var longNameMap = KimiToolNameMap.Create(longNameDocument.RootElement);
+    Check(longNameMap.ToUpstream(longName).Length <= 64,
+        "An overlength tool name was not bounded for the K3 contract.");
+}
+
 var textCompletion = """
 {
   "id":"chat-text-1",
@@ -347,7 +673,9 @@ async Task VerifyRouterScenarioAsync(
     Func<HttpResponseMessage> upstreamResponseFactory,
     bool stream,
     HttpStatusCode expectedStatus,
-    Func<string, bool> bodyAssertion)
+    Func<string, bool> bodyAssertion,
+    string requestModel = "k3",
+    bool expectUpstreamRequest = true)
 {
     var portListener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
     portListener.Start();
@@ -389,7 +717,7 @@ async Task VerifyRouterScenarioAsync(
         request.Content = new StringContent(
             $$"""
             {
-              "model":"k3",
+              "model":"{{requestModel}}",
               "input":"hello",
               "stream":{{stream.ToString().ToLowerInvariant()}}
             }
@@ -432,14 +760,22 @@ async Task VerifyRouterScenarioAsync(
         Check(
             sequenceNumbers.Zip(sequenceNumbers.Skip(1), (previous, next) => next > previous).All(value => value),
             $"{scenarioName}: response sequence_number values were not strictly increasing.");
-        Check(
-            upstream.LastAuthorization == "Bearer server-test-secret",
-            $"{scenarioName}: Bearer credential was not forwarded exactly once.");
-        using (var upstreamRequestDocument = JsonDocument.Parse(upstream.LastRequestBody ?? "{}"))
+        if (expectUpstreamRequest)
         {
+            Check(
+                upstream.LastAuthorization == "Bearer server-test-secret",
+                $"{scenarioName}: Bearer credential was not forwarded exactly once.");
+            using var upstreamRequestDocument = JsonDocument.Parse(
+                upstream.LastRequestBody ?? "{}");
             Check(
                 upstreamRequestDocument.RootElement.GetProperty("model").GetString() == "k3",
                 $"{scenarioName}: the upstream request did not use the canonical k3 model.");
+        }
+        else
+        {
+            Check(
+                upstream.LastAuthorization is null && upstream.LastRequestBody is null,
+                $"{scenarioName}: an unsupported model reached the upstream.");
         }
     }
     catch (Exception exception)
@@ -600,6 +936,22 @@ await VerifyRouterScenarioAsync(
             body.Contains("hello", StringComparison.Ordinal));
 
 await VerifyRouterScenarioAsync(
+    "non-k3 model is rejected",
+    () => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new StringContent(
+            "{\"id\":\"chat-converted\",\"model\":\"k3\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello\"}}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}",
+            System.Text.Encoding.UTF8,
+            "application/json")
+    },
+    stream: false,
+    HttpStatusCode.BadRequest,
+    body => body.Contains("unsupported_model", StringComparison.Ordinal) &&
+            body.Contains("supports only k3", StringComparison.Ordinal),
+    requestModel: "gpt-5.6-sol",
+    expectUpstreamRequest: false);
+
+await VerifyRouterScenarioAsync(
     "stream success",
     () => new HttpResponseMessage(HttpStatusCode.OK)
     {
@@ -633,14 +985,15 @@ await VerifyRouterScenarioAsync(
     () => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
     {
         Content = new StringContent(
-            "{\"error\":{\"message\":\"temporary unavailable\"}}",
+            "{\"error\":{\"code\":\"upstream_busy\",\"message\":\"temporary unavailable server-test-secret\"}}",
             System.Text.Encoding.UTF8,
             "application/json")
     },
     stream: true,
     HttpStatusCode.OK,
     body => body.Contains("event: response.failed", StringComparison.Ordinal) &&
-            body.Contains("upstream_http_error", StringComparison.Ordinal) &&
+            body.Contains("upstream_busy", StringComparison.Ordinal) &&
+            body.Contains("temporary unavailable", StringComparison.Ordinal) &&
             !body.Contains("server-test-secret", StringComparison.Ordinal));
 
 await VerifyRouterScenarioAsync(

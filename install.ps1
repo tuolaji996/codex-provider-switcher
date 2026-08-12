@@ -204,7 +204,6 @@ catch {
     throw
 }
 
-$k3WasActive = Test-KimiConfigurationActive
 $stagedWslLauncher = Join-Path $stageDirectory $wslLauncherName
 $installedLinuxRouter = Join-Path $installDirectory $linuxRouterRelativePath
 try {
@@ -241,11 +240,6 @@ try {
 
     Move-Item -LiteralPath $stageDirectory -Destination $installDirectory
 
-    if ($k3WasActive) {
-        Invoke-WslKimiLauncher `
-            -LauncherWindowsPath (Join-Path $installDirectory $wslLauncherName) `
-            -Action "--ensure-only"
-    }
 }
 catch {
     $installFailed = $_
@@ -266,18 +260,6 @@ catch {
     if (-not (Test-Path -LiteralPath $installDirectory) -and
         (Test-Path -LiteralPath $previousDirectory)) {
         Move-Item -LiteralPath $previousDirectory -Destination $installDirectory
-    }
-
-    if ($k3WasActive) {
-        try {
-            Invoke-WslKimiLauncher `
-                -LauncherWindowsPath (Join-Path $installDirectory $wslLauncherName) `
-                -Action "--ensure-only"
-        }
-        catch {
-            # Preserve the original installation even if its optional WSL
-            # launcher cannot be restarted. The original failure is reported.
-        }
     }
 
     throw $installFailed

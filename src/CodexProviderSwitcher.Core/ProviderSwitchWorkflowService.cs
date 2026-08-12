@@ -41,6 +41,9 @@ public sealed class ProviderSwitchWorkflowService
         ArgumentException.ThrowIfNullOrWhiteSpace(request.BaseUrl);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.TokenBrokerWindowsPath);
         CredentialTargetFactory.RequireValid(request.CredentialTarget);
+        ProviderAvailabilityPolicy.RequireAvailableThirdPartyRoute(
+            request.BaseUrl,
+            request.Model);
         var expectedBaseUrl = ConfigService.NormalizeBaseUrl(request.BaseUrl);
         var expectedModel = request.Model.Trim();
 
@@ -108,6 +111,7 @@ public sealed class ProviderSwitchWorkflowService
         string? configPath = null,
         string? codexHome = null)
     {
+        ProviderAvailabilityPolicy.RequireKimiRouteEnabled();
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Model);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.TokenBrokerWindowsPath);
         CredentialTargetFactory.RequireValid(request.CredentialTarget);

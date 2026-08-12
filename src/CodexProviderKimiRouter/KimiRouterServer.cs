@@ -297,7 +297,7 @@ public sealed class KimiRouterServer : IAsyncDisposable
                 return;
             }
 
-            var requestedModel = ReadString(responsesRequest, "model") ?? _options.DefaultModel;
+            var requestedModel = ReadString(responsesRequest, "model");
             if (!string.Equals(
                     requestedModel,
                     KimiRouterOptions.DefaultModelName,
@@ -308,12 +308,16 @@ public sealed class KimiRouterServer : IAsyncDisposable
                     HttpStatusCode.BadRequest,
                     ErrorBody(
                         "unsupported_model",
-                        $"The Kimi router currently supports only {KimiRouterOptions.DefaultModelName}."),
+                        $"The Kimi router supports only {KimiRouterOptions.DefaultModelName}."),
                     cancellationToken).ConfigureAwait(false);
                 return;
             }
 
-            var chatRequest = KimiResponsesTranslator.BuildChatCompletionsRequest(responsesRequest);
+            requestedModel = KimiRouterOptions.DefaultModelName;
+
+            var chatRequest = KimiResponsesTranslator.BuildChatCompletionsRequest(
+                responsesRequest,
+                out var toolNameMap);
             // The upstream contract is intentionally narrower than the
             // Responses input contract: always send the canonical SuiXiang
             // model id even if a caller used a different casing for `k3`.
@@ -348,6 +352,7 @@ public sealed class KimiRouterServer : IAsyncDisposable
                 streamResponse,
                 bearer,
                 customToolNames,
+                toolNameMap,
                 cancellationToken).ConfigureAwait(false);
         }
     }
@@ -359,6 +364,7 @@ public sealed class KimiRouterServer : IAsyncDisposable
         bool streamResponse,
         string bearer,
         ISet<string> customToolNames,
+        KimiToolNameMap toolNameMap,
         CancellationToken cancellationToken)
     {
         using var upstreamRequest = new HttpRequestMessage(HttpMethod.Post, _options.ChatCompletionsUri)
@@ -386,7 +392,9 @@ public sealed class KimiRouterServer : IAsyncDisposable
                     token),
                 requestedModel,
                 customToolNames,
+                toolNameMap,
                 chatRequest,
+                bearer,
                 cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -439,7 +447,8 @@ public sealed class KimiRouterServer : IAsyncDisposable
                     content,
                     requestedModel,
                     null,
-                    customToolNames);
+                    customToolNames,
+                    toolNameMap);
                 StoreNonStreamingHistory(chatRequest, content, translated);
                 await WriteRawAsync(
                     clientStream,
@@ -454,6 +463,14 @@ public sealed class KimiRouterServer : IAsyncDisposable
                     clientStream,
                     HttpStatusCode.BadGateway,
                     ErrorBody("upstream_protocol_error", "The Kimi upstream returned invalid JSON."),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (UnknownKimiMappedToolNameException)
+            {
+                await WriteJsonAsync(
+                    clientStream,
+                    HttpStatusCode.BadGateway,
+                    ErrorBody("upstream_protocol_error", "The Kimi upstream returned an unknown tool name."),
                     cancellationToken).ConfigureAwait(false);
             }
             catch (InvalidDataException)
@@ -472,7 +489,9 @@ public sealed class KimiRouterServer : IAsyncDisposable
         Func<CancellationToken, Task<HttpResponseMessage>> sendUpstreamAsync,
         string requestedModel,
         ISet<string> customToolNames,
+        KimiToolNameMap toolNameMap,
         JsonObject chatRequest,
+        string bearer,
         CancellationToken cancellationToken)
     {
         var events = new List<KimiResponsesSseEvent>();
@@ -480,6 +499,7 @@ public sealed class KimiRouterServer : IAsyncDisposable
             requestedModel,
             null,
             customToolNames,
+            toolNameMap,
             events.Add);
         try
         {
@@ -527,12 +547,16 @@ public sealed class KimiRouterServer : IAsyncDisposable
             {
                 if (!upstreamResponse.IsSuccessStatusCode)
                 {
+                    var failure = await ReadUpstreamFailureAsync(
+                        upstreamResponse,
+                        bearer,
+                        cancellationToken).ConfigureAwait(false);
                     await FailStreamingResponseAsync(
                         clientStream,
                         state,
                         events,
-                        "upstream_http_error",
-                        $"The Kimi upstream returned HTTP {(int)upstreamResponse.StatusCode}.",
+                        failure.Code,
+                        failure.Message,
                         cancellationToken).ConfigureAwait(false);
                     return;
                 }
@@ -629,6 +653,16 @@ public sealed class KimiRouterServer : IAsyncDisposable
                 "The Kimi upstream timed out.",
                 cancellationToken).ConfigureAwait(false);
         }
+        catch (UnknownKimiMappedToolNameException)
+        {
+            await FailStreamingResponseAsync(
+                clientStream,
+                state,
+                events,
+                "upstream_protocol_error",
+                "The Kimi upstream returned an unknown tool name.",
+                cancellationToken).ConfigureAwait(false);
+        }
         catch (Exception exception) when (
             exception is JsonException or InvalidDataException or HttpRequestException or IOException)
         {
@@ -713,6 +747,31 @@ public sealed class KimiRouterServer : IAsyncDisposable
         string bearer,
         CancellationToken cancellationToken)
     {
+        var failure = await ReadUpstreamFailureAsync(
+            upstreamResponse,
+            bearer,
+            cancellationToken).ConfigureAwait(false);
+
+        var statusClass = (int)upstreamResponse.StatusCode is >= 400 and < 500
+            ? "upstream-4xx"
+            : "upstream-5xx";
+        var extraHeaders =
+            $"X-Kimi-Router-Error-Class: {statusClass}\r\n" +
+            $"X-Kimi-Router-Upstream-Status: {(int)upstreamResponse.StatusCode}\r\n";
+        await WriteRawAsync(
+            clientStream,
+            upstreamResponse.StatusCode,
+            "application/json; charset=utf-8",
+            Encoding.UTF8.GetBytes(failure.Body),
+            cancellationToken,
+            extraHeaders).ConfigureAwait(false);
+    }
+
+    private static async Task<UpstreamFailure> ReadUpstreamFailureAsync(
+        HttpResponseMessage upstreamResponse,
+        string bearer,
+        CancellationToken cancellationToken)
+    {
         string body;
         try
         {
@@ -731,22 +790,69 @@ public sealed class KimiRouterServer : IAsyncDisposable
             body = body.Replace(bearer, "[REDACTED]", StringComparison.Ordinal);
         }
 
-        var statusClass = (int)upstreamResponse.StatusCode is >= 400 and < 500
-            ? "upstream-4xx"
-            : "upstream-5xx";
-        var extraHeaders =
-            $"X-Kimi-Router-Error-Class: {statusClass}\r\n" +
-            $"X-Kimi-Router-Upstream-Status: {(int)upstreamResponse.StatusCode}\r\n";
-        await WriteRawAsync(
-            clientStream,
-            upstreamResponse.StatusCode,
-            "application/json; charset=utf-8",
-            Encoding.UTF8.GetBytes(string.IsNullOrWhiteSpace(body)
-                ? ErrorBody("upstream_http_error", $"Kimi upstream returned {(int)upstreamResponse.StatusCode}.").ToJsonString()
-                : body),
-            cancellationToken,
-            extraHeaders).ConfigureAwait(false);
+        var status = (int)upstreamResponse.StatusCode;
+        var code = "upstream_http_error";
+        var message = $"The Kimi upstream returned HTTP {status}.";
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            var error = root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("error", out var errorValue)
+                    ? errorValue
+                    : root;
+            if (error.ValueKind == JsonValueKind.Object)
+            {
+                var upstreamCode = ReadString(error, "code") ?? ReadString(error, "type");
+                var upstreamMessage = ReadString(error, "message");
+                if (!string.IsNullOrWhiteSpace(upstreamCode))
+                {
+                    code = SanitizeDiagnostic(upstreamCode, bearer, 128);
+                }
+
+                if (!string.IsNullOrWhiteSpace(upstreamMessage))
+                {
+                    message = $"Kimi upstream HTTP {status}: " +
+                        SanitizeDiagnostic(upstreamMessage, bearer, 2048);
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            var compact = SanitizeDiagnostic(body, bearer, 2048);
+            if (!string.IsNullOrWhiteSpace(compact))
+            {
+                message = $"Kimi upstream HTTP {status}: {compact}";
+            }
+        }
+
+        var responseBody = string.IsNullOrWhiteSpace(body)
+            ? ErrorBody(code, message).ToJsonString()
+            : body;
+        Console.Error.WriteLine(
+            "{0:O} upstream failure status={1} code={2} message={3}",
+            DateTimeOffset.UtcNow,
+            status,
+            SanitizeDiagnostic(code, bearer, 128),
+            SanitizeDiagnostic(message, bearer, 2048));
+        return new UpstreamFailure(code, message, responseBody);
     }
+
+    private static string SanitizeDiagnostic(string? value, string bearer, int maxLength)
+    {
+        var sanitized = (value ?? string.Empty)
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Trim();
+        if (!string.IsNullOrEmpty(bearer))
+        {
+            sanitized = sanitized.Replace(bearer, "[REDACTED]", StringComparison.Ordinal);
+        }
+
+        return sanitized.Length <= maxLength ? sanitized : sanitized[..maxLength];
+    }
+
+    private sealed record UpstreamFailure(string Code, string Message, string Body);
 
     private static async Task<string> ReadBoundedTextAsync(
         HttpContent content,
