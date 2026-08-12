@@ -814,9 +814,13 @@ public partial class MainWindow : Window
         if (setup.ProviderKind == ProviderKinds.Kimi)
         {
             ValidateKimiModel(model);
+            var reuseExistingProfile = apiKey.Length == 0;
             if (apiKey.Length == 0)
             {
-                apiKey = ResolveSavedKeyForExactBaseUrl(baseUrl);
+                apiKey = ResolveSavedKeyForExactRoute(
+                    baseUrl,
+                    model,
+                    ProviderKinds.Kimi);
             }
             else if (apiKey.Length < 16)
             {
@@ -824,7 +828,12 @@ public partial class MainWindow : Window
                     "请粘贴完整的新随想 API Key。",
                     "Paste a complete new SuiXiang API key."));
             }
-            await ApplyKimiSetupResultAsync(setup, baseUrl, model, apiKey);
+            await ApplyKimiSetupResultAsync(
+                setup,
+                baseUrl,
+                model,
+                apiKey,
+                reuseExistingProfile);
             return;
         }
 
@@ -847,16 +856,16 @@ public partial class MainWindow : Window
             throw new InvalidOperationException(compatibility.Summary);
         }
 
-        var profile = ActiveProviderProfile;
-        var before = new ProviderProfile
-        {
-            Id = profile.Id,
-            Kind = profile.Kind,
-            DisplayName = profile.DisplayName,
-            BaseUrl = profile.BaseUrl,
-            Model = profile.Model,
-            CredentialTarget = profile.CredentialTarget
-        };
+        var previousActiveProfileId = _settings.ActiveProviderProfileId;
+        var previousThirdPartyBaseUrl = _settings.ThirdPartyBaseUrl;
+        var previousThirdPartyModel = _settings.ThirdPartyModel;
+        var profile = SelectOrCreateProfileForSetup(
+            baseUrl,
+            model,
+            setup.ProviderKind,
+            reuseExistingProfile: false,
+            out var createdProfile);
+        var before = CloneProviderProfile(profile);
         var target = CredentialTargetFactory.RequireValid(profile.CredentialTarget);
         var previousKey = CredentialVault.Read(target);
         var currentConfig = _configService.ReadStatus();
@@ -906,13 +915,14 @@ public partial class MainWindow : Window
         }
         catch when (!switched)
         {
-            profile.Kind = before.Kind;
-            profile.DisplayName = before.DisplayName;
-            profile.BaseUrl = before.BaseUrl;
-            profile.Model = before.Model;
-            profile.CredentialTarget = before.CredentialTarget;
-            _settings.ThirdPartyBaseUrl = before.BaseUrl;
-            _settings.ThirdPartyModel = before.Model;
+            RestoreProviderProfile(
+                profile,
+                before,
+                createdProfile,
+                previousActiveProfileId,
+                save: false);
+            _settings.ThirdPartyBaseUrl = previousThirdPartyBaseUrl;
+            _settings.ThirdPartyModel = previousThirdPartyModel;
             if (previousKey is null)
             {
                 CredentialVault.Delete(target);
@@ -937,7 +947,8 @@ public partial class MainWindow : Window
         SetupWizardResult setup,
         string upstreamBaseUrl,
         string model,
-        string apiKey)
+        string apiKey,
+        bool reuseExistingProfile)
     {
         if (!SettingsStore.IsKimiBaseUrl(upstreamBaseUrl))
         {
@@ -954,6 +965,8 @@ public partial class MainWindow : Window
         var profile = SelectOrCreateProfileForSetup(
             upstreamBaseUrl,
             model,
+            ProviderKinds.Kimi,
+            reuseExistingProfile,
             out var createdProfile);
         var before = CloneProviderProfile(profile);
         var target = CredentialTargetFactory.RequireValid(profile.CredentialTarget);
@@ -1034,9 +1047,33 @@ public partial class MainWindow : Window
     private ProviderProfile SelectOrCreateProfileForSetup(
         string normalizedBaseUrl,
         string model,
+        string requiredKind,
+        bool reuseExistingProfile,
         out bool created)
     {
-        var profile = FindProfileByBaseUrl(normalizedBaseUrl);
+        var exactMatches = ProviderProfileRouteMatcher.FindExact(
+            _settings.ProviderProfiles,
+            normalizedBaseUrl,
+            model,
+            requiredKind);
+        // A single exact route is safe to reuse only when the wizard is
+        // explicitly reusing its saved credential. Pasted credentials always
+        // receive a fresh isolated profile, so setup cannot overwrite an
+        // existing account by accident.
+        if (reuseExistingProfile && exactMatches.Count != 1)
+        {
+            throw new InvalidOperationException(T(
+                exactMatches.Count > 1
+                    ? "这个线路有多个已保存账号，无法猜测要使用哪一个。请在供应商页明确选择账号，或粘贴新的 API Key。"
+                    : "这个线路没有唯一的已保存账号，请粘贴完整的 API Key。",
+                exactMatches.Count > 1
+                    ? "Multiple saved accounts match this route. Select one explicitly on Providers, or paste a new API key."
+                    : "No unique saved account matches this route. Paste a complete API key."));
+        }
+
+        var profile = reuseExistingProfile && exactMatches.Count == 1
+            ? exactMatches[0]
+            : null;
         created = profile is null;
         if (profile is null)
         {
@@ -1044,6 +1081,7 @@ public partial class MainWindow : Window
             profile = new ProviderProfile
             {
                 Id = profileId,
+                Kind = requiredKind,
                 BaseUrl = normalizedBaseUrl,
                 Model = model,
                 CredentialTarget = CredentialTargetFactory.CreateForProfileId(profileId)
@@ -1068,34 +1106,39 @@ public partial class MainWindow : Window
         return profile;
     }
 
-    private ProviderProfile? FindProfileByBaseUrl(string normalizedBaseUrl)
+    private string ResolveSavedKeyForExactRoute(
+        string normalizedBaseUrl,
+        string model,
+        string requiredKind)
     {
-        var active = _settings.ActiveProviderProfile;
-        if (active is not null &&
-            ProfileMatchesBaseUrl(active, normalizedBaseUrl))
-        {
-            return active;
-        }
-
-        return _settings.ProviderProfiles.FirstOrDefault(candidate =>
-            ProfileMatchesBaseUrl(candidate, normalizedBaseUrl));
-    }
-
-    private string ResolveSavedKeyForExactBaseUrl(string normalizedBaseUrl)
-    {
-        var profile = FindProfileByBaseUrl(normalizedBaseUrl);
-        if (profile is null ||
-            !CredentialTargetFactory.IsValid(profile.CredentialTarget))
+        var exactMatches = ProviderProfileRouteMatcher.FindExact(
+            _settings.ProviderProfiles,
+            normalizedBaseUrl,
+            model,
+            requiredKind);
+        if (exactMatches.Count != 1)
         {
             throw new InvalidOperationException(T(
-                "该随想 Base URL 尚无已保存的 API Key，请粘贴新密钥。",
-                "No saved API key exists for this SuiXiang Base URL; paste a new key."));
+                exactMatches.Count > 1
+                    ? "该随想 K3 路由有多个已保存账号，请先选择账号或粘贴新密钥。"
+                    : "该随想 K3 路由尚无已保存的 API Key，请粘贴新密钥。",
+                exactMatches.Count > 1
+                    ? "Multiple saved accounts match this SuiXiang K3 route; select an account or paste a new key."
+                    : "No saved API key exists for this SuiXiang K3 route; paste a new key."));
+        }
+
+        var profile = exactMatches[0];
+        if (!CredentialTargetFactory.IsValid(profile.CredentialTarget))
+        {
+            throw new InvalidOperationException(T(
+                "该随想 K3 账号没有有效的凭据引用，请粘贴新密钥。",
+                "This SuiXiang K3 account has no valid credential reference; paste a new key."));
         }
 
         return CredentialVault.Read(profile.CredentialTarget)
             ?? throw new InvalidOperationException(T(
-                "该随想 Base URL 尚无已保存的 API Key，请粘贴新密钥。",
-                "No saved API key exists for this SuiXiang Base URL; paste a new key."));
+                "该随想 K3 账号尚无已保存的 API Key，请粘贴新密钥。",
+                "No saved API key exists for this SuiXiang K3 account; paste a new key."));
     }
 
     private static ProviderProfile CloneProviderProfile(ProviderProfile profile) =>
@@ -2891,14 +2934,30 @@ public partial class MainWindow : Window
 
     private string ResolveKeyForModelDiscovery(string normalizedBaseUrl)
     {
-        // Resolve the profile by the URL first. Never fall back to the active
-        // profile's credential when the URL points at another service.
+        var model = ModelComboBox.Text.Trim();
+        var kimiRoute = SettingsStore.IsKimiBaseUrl(normalizedBaseUrl) &&
+                        string.Equals(
+                            model,
+                            AppPaths.DefaultKimiModel,
+                            StringComparison.Ordinal);
         var selected = DraftProviderProfile;
-        var profile = selected is not null &&
-                      ProfileMatchesBaseUrl(selected, normalizedBaseUrl)
-            ? selected
-            : _settings.ProviderProfiles.FirstOrDefault(candidate =>
-                ProfileMatchesBaseUrl(candidate, normalizedBaseUrl));
+        var selectedMatchesRoute = !kimiRoute &&
+                                   selected is not null &&
+                                   ProviderProfileRouteMatcher.FindExact(
+                                       [selected],
+                                       normalizedBaseUrl,
+                                       model,
+                                       selected.Kind).Count == 1;
+        var requiredKind = kimiRoute
+            ? ProviderKinds.Kimi
+            : selectedMatchesRoute
+                ? selected!.Kind
+                : null;
+        var routeMatches = ProviderProfileRouteMatcher.FindExact(
+            _settings.ProviderProfiles,
+            normalizedBaseUrl,
+            model,
+            requiredKind);
 
         var entered = ApiKeyPasswordBox.Password.Trim();
         if (!string.IsNullOrWhiteSpace(entered))
@@ -2913,18 +2972,23 @@ public partial class MainWindow : Window
             return entered;
         }
 
-        if (profile is null)
+        if (routeMatches.Count != 1)
         {
             throw new InvalidOperationException(T(
-                "这个 Base URL 尚无已保存的密钥。请先输入属于该服务的新 API Key；不会复用其他线路的密钥。",
-                "This Base URL has no saved key. Enter a new key for this service; a key from another route will never be reused."));
+                routeMatches.Count > 1
+                    ? "这个线路有多个已保存账号，请先选择账号或粘贴新 API Key。"
+                    : "这个线路尚无已保存的密钥。请先输入属于该服务的新 API Key。",
+                routeMatches.Count > 1
+                    ? "Multiple saved accounts match this route. Select an account or paste a new API key."
+                    : "This route has no saved key. Enter a new API key for this service."));
         }
 
+        var profile = routeMatches[0];
         var target = CredentialTargetFactory.RequireValid(profile.CredentialTarget);
         return CredentialVault.Read(target)
             ?? throw new InvalidOperationException(T(
-                "当前 Base URL 尚未保存 API Key。请先输入属于该服务的新密钥。",
-                "No API key is saved for the current Base URL. Enter a new key for this service."));
+                "当前线路尚未保存 API Key。请先输入属于该服务的新密钥。",
+                "No API key is saved for the current route. Enter a new key for this service."));
     }
 
     private string ResolveAndOptionallySaveKey()

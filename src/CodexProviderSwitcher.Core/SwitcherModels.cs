@@ -80,6 +80,74 @@ public sealed class ProviderProfile
         AppPaths.LegacySuiXiangCredentialTarget;
 }
 
+/// <summary>
+/// Finds saved accounts by their complete provider route identity.  A Base
+/// URL alone is not an account identity because one upstream can expose
+/// multiple models and protocol adapters.
+/// </summary>
+public static class ProviderProfileRouteMatcher
+{
+    public static IReadOnlyList<ProviderProfile> FindExact(
+        IEnumerable<ProviderProfile> profiles,
+        string normalizedBaseUrl,
+        string model,
+        string? requiredKind = null)
+    {
+        ArgumentNullException.ThrowIfNull(profiles);
+
+        string expectedBaseUrl;
+        try
+        {
+            expectedBaseUrl = ConfigService.NormalizeBaseUrl(normalizedBaseUrl);
+        }
+        catch (ArgumentException)
+        {
+            return Array.Empty<ProviderProfile>();
+        }
+
+        var expectedModel = model.Trim();
+        if (expectedModel.Length == 0)
+        {
+            return Array.Empty<ProviderProfile>();
+        }
+
+        return profiles
+            .Where(profile =>
+            {
+                if (profile is null)
+                {
+                    return false;
+                }
+
+                string candidateBaseUrl;
+                try
+                {
+                    candidateBaseUrl = ConfigService.NormalizeBaseUrl(
+                        profile.BaseUrl ?? string.Empty);
+                }
+                catch (ArgumentException)
+                {
+                    return false;
+                }
+
+                return string.Equals(
+                           candidateBaseUrl,
+                           expectedBaseUrl,
+                           StringComparison.OrdinalIgnoreCase) &&
+                       string.Equals(
+                           (profile.Model ?? string.Empty).Trim(),
+                           expectedModel,
+                           StringComparison.Ordinal) &&
+                       (requiredKind is null ||
+                        string.Equals(
+                            profile.Kind,
+                            requiredKind,
+                            StringComparison.Ordinal));
+            })
+            .ToArray();
+    }
+}
+
 public sealed class SwitcherSettings
 {
     public const int CurrentSchemaVersion = 2;

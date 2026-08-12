@@ -41,9 +41,10 @@ setting. It then offers four equally valid choices:
   does not read passwords, CAPTCHA data, or cookies. After sign-in, the user
   creates an API key with SuiXiang and pastes it into the app.
 - **Connect SuiXiang K3 (experimental)** uses a SuiXiang API key for **`k3`**.
-  An existing key saved for the exact normalized SuiXiang Base URL can be
-  reused by leaving the key field blank; a key from any other URL is never
-  reused. The app verifies SuiXiang's upstream Chat Completions endpoint,
+  An existing key is reused only when exactly one saved K3 account matches the
+  normalized Base URL, model, and adapter. Direct SuiXiang accounts and
+  duplicate K3 accounts are never selected implicitly. The app verifies
+  SuiXiang's upstream Chat Completions endpoint,
   health-checks and starts the bundled Linux router inside WSL, then builds its
   managed model catalog and restarts Codex around the startup-only
   catalog/config write. Other SuiXiang model IDs remain ordinary direct

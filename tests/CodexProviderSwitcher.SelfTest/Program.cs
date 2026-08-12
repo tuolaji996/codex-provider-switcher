@@ -1397,6 +1397,31 @@ try
         !SettingsStore.IsKimiBaseUrl("https://sui-xiang.com/v1?target=other") &&
         SettingsStore.IsKimiLoopbackBaseUrl(AppPaths.KimiRouterBaseUrl),
         "Kimi URL recognition accepted a deceptive host or rejected loopback routing.");
+
+    var directRouteProfile = new ProviderProfile
+    {
+        Kind = ProviderKinds.SuiXiang,
+        BaseUrl = "https://sui-xiang.com/v1/",
+        Model = "gpt-5.6-sol"
+    };
+    var secondKimiRouteProfile = new ProviderProfile
+    {
+        Kind = ProviderKinds.Kimi,
+        BaseUrl = "https://sui-xiang.com/v1/",
+        Model = AppPaths.DefaultKimiModel
+    };
+    Check(
+        ProviderProfileRouteMatcher.FindExact(
+            [directRouteProfile, kimiProfile],
+            AppPaths.KimiUpstreamBaseUrl,
+            AppPaths.DefaultKimiModel,
+            ProviderKinds.Kimi).Single().Id == kimiProfile.Id &&
+        ProviderProfileRouteMatcher.FindExact(
+            [kimiProfile, secondKimiRouteProfile],
+            AppPaths.KimiUpstreamBaseUrl,
+            AppPaths.DefaultKimiModel,
+            ProviderKinds.Kimi).Count == 2,
+        "Provider route matching did not isolate direct SuiXiang and duplicate K3 accounts.");
 }
 finally
 {

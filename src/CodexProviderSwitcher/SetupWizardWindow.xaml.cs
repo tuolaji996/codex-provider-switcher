@@ -216,7 +216,9 @@ public partial class SetupWizardWindow : Window
         string key;
         try
         {
-            key = ResolveKeyForModelDiscovery(normalizedBaseUrl);
+            key = ResolveKeyForModelDiscovery(
+                normalizedBaseUrl,
+                currentModel);
         }
         catch (Exception exception)
         {
@@ -312,25 +314,10 @@ public partial class SetupWizardWindow : Window
         }
     }
 
-    private string ResolveKeyForModelDiscovery(string normalizedBaseUrl)
+    private string ResolveKeyForModelDiscovery(
+        string normalizedBaseUrl,
+        string model)
     {
-        // Resolve a profile for this exact URL before touching Credential
-        // Manager. This prevents a saved key from another route being reused.
-        var profile = _settings.ProviderProfiles.FirstOrDefault(candidate =>
-        {
-            try
-            {
-                return string.Equals(
-                    ConfigService.NormalizeBaseUrl(candidate.BaseUrl),
-                    normalizedBaseUrl,
-                    StringComparison.OrdinalIgnoreCase);
-            }
-            catch (ArgumentException)
-            {
-                return false;
-            }
-        });
-
         var entered = WizardApiKeyPasswordBox.Password.Trim();
         if (!string.IsNullOrWhiteSpace(entered))
         {
@@ -344,38 +331,41 @@ public partial class SetupWizardWindow : Window
             return entered;
         }
 
-        if (profile is null)
+        var profileMatches = ProviderProfileRouteMatcher.FindExact(
+            _settings.ProviderProfiles,
+            normalizedBaseUrl,
+            model,
+            _selectedProviderKind);
+        if (profileMatches.Count != 1)
         {
             throw new InvalidOperationException(T(
-                "这个 Base URL 尚无已保存的密钥。请先输入属于该服务的新 API Key；不会复用其他线路的密钥。",
-                "This Base URL has no saved key. Enter a new key for this service; a key from another route will never be reused."));
+                profileMatches.Count > 1
+                    ? "这个线路有多个已保存账号，请先选择账号或粘贴新 API Key。"
+                    : "这个线路尚无已保存的密钥。请先输入属于该服务的新 API Key。",
+                profileMatches.Count > 1
+                    ? "Multiple saved accounts match this route. Select an account or paste a new API key."
+                    : "This route has no saved key. Enter a new API key for this service."));
         }
 
+        var profile = profileMatches[0];
         var target = CredentialTargetFactory.RequireValid(profile.CredentialTarget);
         return CredentialVault.Read(target)
             ?? throw new InvalidOperationException(T(
-                "当前 Base URL 尚未保存 API Key。请先输入属于该服务的新密钥。",
-                "No API key is saved for the current Base URL. Enter a new key for this service."));
+                "当前线路尚未保存 API Key。请先输入属于该服务的新密钥。",
+                "No API key is saved for the current route. Enter a new key for this service."));
     }
 
-    private bool HasSavedKeyForExactBaseUrl(string normalizedBaseUrl)
+    private bool HasSavedKeyForExactRoute(
+        string normalizedBaseUrl,
+        string model)
     {
-        var profile = _settings.ProviderProfiles.FirstOrDefault(candidate =>
-        {
-            try
-            {
-                return string.Equals(
-                    ConfigService.NormalizeBaseUrl(candidate.BaseUrl),
-                    normalizedBaseUrl,
-                    StringComparison.OrdinalIgnoreCase);
-            }
-            catch (ArgumentException)
-            {
-                return false;
-            }
-        });
-
-        return profile is not null &&
+        var matches = ProviderProfileRouteMatcher.FindExact(
+            _settings.ProviderProfiles,
+            normalizedBaseUrl,
+            model,
+            _selectedProviderKind);
+        return matches.Count == 1 &&
+               matches[0] is { } profile &&
                CredentialTargetFactory.IsValid(profile.CredentialTarget) &&
                CredentialVault.Exists(profile.CredentialTarget);
     }
@@ -509,7 +499,7 @@ public partial class SetupWizardWindow : Window
         var canReuseExistingKimiKey =
             _selectedProviderKind == ProviderKinds.Kimi &&
             normalizedBaseUrl is not null &&
-            HasSavedKeyForExactBaseUrl(normalizedBaseUrl);
+            HasSavedKeyForExactRoute(normalizedBaseUrl, model);
         if (string.IsNullOrWhiteSpace(baseUrl) ||
             string.IsNullOrWhiteSpace(model) ||
             (apiKey.Length > 0 && apiKey.Length < 16) ||
