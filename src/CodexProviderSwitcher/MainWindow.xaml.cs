@@ -55,6 +55,14 @@ public partial class MainWindow : Window
     private bool _updateCheckFailed;
     private bool _isCheckingForUpdates;
     private bool _solUltraAvailable;
+    private SolContextWindowStatus _solContextWindowStatus = new(
+        SolContextWindowMode.Default,
+        null,
+        null,
+        false);
+    private bool _solContextWindowAppliesToCurrentModel;
+    private string? _solContextWindowCurrentModel;
+    private bool _solContextWindowUsesThirdPartyRoute;
     private string? _configurationRestartWarning;
     private bool _isRefreshingProviderProfiles;
     // The picker is deliberately a draft selector.  A saved account is not
@@ -127,6 +135,7 @@ public partial class MainWindow : Window
             UpdateVersionText();
             RefreshLunaWorkerAgentStatus(status);
             RefreshSolUltraSetting();
+            RefreshSolContextWindowSetting(status);
             BaseUrlTextBox.Text = _settings.ThirdPartyBaseUrl;
             ModelComboBox.Text = _settings.ThirdPartyModel;
             RefreshProviderProfilePicker();
@@ -583,6 +592,218 @@ public partial class MainWindow : Window
         }
 
         return false;
+    }
+
+    private void RefreshSolContextWindowSetting(ConfigStatus? configStatus = null)
+    {
+        configStatus ??= _configService.ReadStatus();
+        _solContextWindowStatus = _configService.ReadSolContextWindowStatus();
+        _solContextWindowCurrentModel = configStatus.Model;
+        _solContextWindowUsesThirdPartyRoute =
+            configStatus.Mode == ProviderMode.ThirdParty;
+        _solContextWindowAppliesToCurrentModel =
+            ConfigService.IsSolModel(configStatus.Model);
+        UpdateSolContextWindowStatus();
+    }
+
+    private void UpdateSolContextWindowStatus()
+    {
+        if (!_solContextWindowAppliesToCurrentModel)
+        {
+            var currentModel = string.IsNullOrWhiteSpace(_solContextWindowCurrentModel)
+                ? T("未设置", "not set")
+                : _solContextWindowCurrentModel;
+            SolContextWindowStatusText.Text = F(
+                "仅支持 gpt-5.6-sol（当前：{0}）",
+                "GPT-5.6 Sol only (current: {0})",
+                currentModel);
+            ToggleSolContextWindowButton.Content = T("仅限 Sol", "Sol only");
+            ToggleSolContextWindowButton.ToolTip = T(
+                "请先将当前模型切换为 gpt-5.6-sol。",
+                "Switch the active model to gpt-5.6-sol first.");
+            ToggleSolContextWindowButton.IsEnabled = false;
+            return;
+        }
+
+        var providerWarning = _solContextWindowUsesThirdPartyRoute
+            ? T(
+                "；第三方实际支持仍由供应商决定",
+                "; actual third-party support depends on the provider")
+            : string.Empty;
+
+        switch (_solContextWindowStatus.Mode)
+        {
+            case SolContextWindowMode.Recommended:
+                SolContextWindowStatusText.Text = _solContextWindowStatus.Managed
+                    ? F(
+                        "已启用：1,000,000 / 900,000{0}",
+                        "Enabled: 1,000,000 / 900,000{0}",
+                        providerWarning)
+                    : F(
+                        "已检测到手动推荐值：1,000,000 / 900,000{0}",
+                        "Manual recommended values detected: 1,000,000 / 900,000{0}",
+                        providerWarning);
+                ToggleSolContextWindowButton.Content = T(
+                    "恢复默认并重启",
+                    "Restore defaults and restart");
+                ToggleSolContextWindowButton.ToolTip = _solContextWindowStatus.Managed
+                    ? T(
+                        "删除本工具管理的上下文设置，然后重启 Codex。",
+                        "Remove the context settings managed by this tool, then restart Codex.")
+                    : T(
+                        "需要先确认。删除当前手动推荐值，然后重启 Codex。",
+                        "Confirmation is required. Remove the current manual recommended values, then restart Codex.");
+                ToggleSolContextWindowButton.IsEnabled = !_isBusy;
+                break;
+            case SolContextWindowMode.Custom:
+                SolContextWindowStatusText.Text = F(
+                    "已检测到手动设置：{0} / {1}{2}",
+                    "Manual settings detected: {0} / {1}{2}",
+                    FormatContextWindowValue(_solContextWindowStatus.ContextWindow),
+                    FormatContextWindowValue(
+                        _solContextWindowStatus.AutoCompactTokenLimit),
+                    providerWarning);
+                ToggleSolContextWindowButton.Content = T(
+                    "改用推荐值并重启",
+                    "Use recommended and restart");
+                ToggleSolContextWindowButton.ToolTip = T(
+                    "需要先确认。工具会备份 config.toml，再用 1,000,000 / 900,000 覆盖当前手动值。",
+                    "Confirmation is required. The tool backs up config.toml before replacing the current manual values with 1,000,000 / 900,000.");
+                ToggleSolContextWindowButton.IsEnabled = !_isBusy;
+                break;
+            default:
+                SolContextWindowStatusText.Text = F(
+                    "未启用（使用 Codex 默认值）{0}",
+                    "Not enabled (using Codex defaults){0}",
+                    providerWarning);
+                ToggleSolContextWindowButton.Content = T(
+                    "启用并重启 Codex",
+                    "Enable and restart Codex");
+                ToggleSolContextWindowButton.ToolTip = T(
+                    "写入 1,000,000 上下文和 900,000 自动压缩阈值，然后重启 Codex。",
+                    "Set a 1,000,000-token context window and 900,000-token auto-compaction threshold, then restart Codex.");
+                ToggleSolContextWindowButton.IsEnabled = !_isBusy;
+                break;
+        }
+    }
+
+    private string FormatContextWindowValue(long? value) =>
+        value.HasValue
+            ? F("{0:N0}", "{0:N0}", value.Value)
+            : T("未设置", "not set");
+
+    private async void ToggleSolContextWindowButton_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (!_isInitialized)
+        {
+            return;
+        }
+
+        RefreshSolContextWindowSetting();
+        if (!_solContextWindowAppliesToCurrentModel)
+        {
+            return;
+        }
+
+        var replaceCustom =
+            _solContextWindowStatus.Mode == SolContextWindowMode.Custom;
+        var removeUserOwnedRecommended =
+            _solContextWindowStatus.Mode == SolContextWindowMode.Recommended &&
+            !_solContextWindowStatus.Managed;
+        if (replaceCustom &&
+            MessageBox.Show(
+                this,
+                F(
+                    "当前手动设置为 {0} / {1}。\n\n继续将先备份 config.toml，再用推荐值 1,000,000 / 900,000 覆盖这些值并重启 Codex。是否继续？",
+                    "The current manual settings are {0} / {1}.\n\nContinuing will back up config.toml, replace these values with the recommended 1,000,000 / 900,000 settings, and restart Codex. Continue?",
+                    FormatContextWindowValue(
+                        _solContextWindowStatus.ContextWindow),
+                    FormatContextWindowValue(
+                        _solContextWindowStatus.AutoCompactTokenLimit)),
+                T("覆盖手动上下文设置", "Replace manual context settings"),
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        if (removeUserOwnedRecommended &&
+            MessageBox.Show(
+                this,
+                T(
+                    "这两个推荐值是手动写入的，不属于本工具管理。继续将先备份 config.toml，再删除它们并恢复 Codex 默认值。是否继续？",
+                    "These recommended values were added manually and are not managed by this tool. Continuing will back up config.toml, remove them, and restore Codex defaults. Continue?"),
+                T("删除手动上下文设置", "Remove manual context settings"),
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var enable =
+            _solContextWindowStatus.Mode != SolContextWindowMode.Recommended;
+        await RunBusyAsync(async () =>
+        {
+            OperationStatusText.Text = enable
+                ? T(
+                    "正在关闭 Codex，然后安全启用百万上下文…",
+                    "Closing Codex before safely enabling the 1M context window...")
+                : T(
+                    "正在关闭 Codex，然后恢复默认上下文设置…",
+                    "Closing Codex before restoring the default context settings...");
+            await _processService.StopAsync();
+
+            string? backupFolder = null;
+            try
+            {
+                backupFolder = _configService.SetSolContextWindow(
+                    enable,
+                    replaceCustom: replaceCustom);
+                OperationStatusText.Text = enable
+                    ? T(
+                        "百万上下文已写入，正在启动 Codex…",
+                        "The 1M context window was written. Starting Codex...")
+                    : T(
+                        "默认上下文设置已恢复，正在启动 Codex…",
+                        "The default context settings were restored. Starting Codex...");
+            }
+            catch (Exception updateException)
+            {
+                try
+                {
+                    await _processService.StartAsync();
+                }
+                catch (Exception restartException)
+                {
+                    throw new AggregateException(
+                        T(
+                            "上下文配置更新失败，并且 Codex 未能重新启动。请检查配置和备份。",
+                            "The context update failed and Codex could not be restarted. Check the configuration and backups."),
+                        updateException,
+                        restartException);
+                }
+
+                throw;
+            }
+
+            await _processService.StartAsync();
+
+            RefreshSolContextWindowSetting(_configService.ReadStatus());
+            RefreshBackups();
+            OperationStatusText.Text = F(
+                enable
+                    ? "Sol 百万上下文已启用并重启 Codex；请新建任务使用完整窗口。备份：{0}"
+                    : "Sol 上下文已恢复为 Codex 默认值并重启；请新建任务。备份：{0}",
+                enable
+                    ? "Sol 1M context is enabled and Codex was restarted; start a new task to use the full window. Backup: {0}"
+                    : "Sol context was restored to Codex defaults and restarted; start a new task. Backup: {0}",
+                backupFolder ?? T("无需写入", "No write needed"));
+        });
+
+        RefreshSolContextWindowSetting();
+        RefreshBackups();
     }
 
     private async void UpdateActionButton_Click(object sender, RoutedEventArgs e)
@@ -1274,6 +1495,7 @@ public partial class MainWindow : Window
         var status = _configService.ReadStatus();
         UpdateModeBadge(status);
         RefreshLunaWorkerAgentStatus(status);
+        RefreshSolContextWindowSetting(status);
 
         CurrentRouteText.Text = status.Mode switch
         {
@@ -3399,6 +3621,7 @@ public partial class MainWindow : Window
         OpenGitHubButton.IsEnabled = !busy;
         RunSetupAgainButton.IsEnabled = !busy;
         EnableSolUltraButton.IsEnabled = !busy && !_solUltraAvailable;
+        UpdateSolContextWindowStatus();
         InstallLunaWorkerButton.IsEnabled =
             !busy &&
             lunaRouteStatus.Mode != ProviderMode.Unknown &&
@@ -3584,6 +3807,12 @@ public partial class MainWindow : Window
         SolUltraDescriptionText.Text = T(
             "简体中文 Codex 会把 xhigh 和 Ultra 都显示为“极高”。Ultra 是菜单最底部带“更快消耗使用额度”的一项；Luna Agent 仍使用 Max。",
             "Simplified Chinese Codex labels both xhigh and Ultra as 'Extremely high'. Ultra is the bottom item with the faster usage warning; the Luna task agent remains on Max.");
+        SolContextWindowTitleText.Text = T(
+            "Sol 百万上下文",
+            "Sol 1M context");
+        SolContextWindowDescriptionText.Text = T(
+            "仅用于 gpt-5.6-sol。使用 1,000,000 上下文和 900,000 自动压缩；重启后请新建任务，第三方实际上限仍由供应商决定。",
+            "For gpt-5.6-sol only. Uses 1,000,000 context and 900,000 auto-compaction; start a new task after restart, and verify the provider supports the actual limit.");
         LunaWorkerTitleText.Text = T(
             "Luna 任务 Agent",
             "Luna task agent");
@@ -3620,6 +3849,7 @@ public partial class MainWindow : Window
         DarkThemeButton.ToolTip = T("使用深色外观", "Use dark appearance");
         SystemThemeButton.ToolTip = T("跟随 Windows 外观", "Follow Windows appearance");
         UpdateSolUltraStatus();
+        RefreshSolContextWindowSetting(_lastConfigStatus);
         UpdateLunaWorkerAgentStatus();
         RefreshProviderProfilePicker();
         UpdateKimiUi();
@@ -3645,7 +3875,7 @@ public partial class MainWindow : Window
 
     private static Version CurrentApplicationVersion() =>
         GitHubReleaseUpdateService.NormalizeVersion(
-            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 4, 3));
+            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 4, 4));
 
     private Brush ResourceBrush(string key) =>
         (Brush)FindResource(key);

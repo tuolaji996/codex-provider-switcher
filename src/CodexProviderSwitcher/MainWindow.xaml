@@ -132,7 +132,7 @@
                                    VerticalAlignment="Center" />
                         <TextBlock x:Name="VersionText"
                                    Grid.Column="2"
-                                   Text="v1.4.3"
+                                   Text="v1.4.4"
                                    Foreground="{DynamicResource SubtleTextBrush}"
                                    FontSize="10"
                                    Margin="8,0,0,0"
@@ -988,6 +988,7 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <Grid Grid.Row="0" Margin="0,0,0,10">
@@ -1181,6 +1182,48 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <StackPanel Margin="0,0,20,0">
+                                <TextBlock x:Name="SolContextWindowTitleText"
+                                           Text="Sol 百万上下文"
+                                           FontWeight="SemiBold"
+                                           FontSize="13" />
+                                <TextBlock x:Name="SolContextWindowDescriptionText"
+                                           Text="仅用于 gpt-5.6-sol。推荐使用 1,000,000 / 900,000；第三方实际上限仍由供应商决定。"
+                                           Style="{StaticResource PageLeadStyle}"
+                                           Margin="0,2,0,0"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center">
+                                <TextBlock x:Name="SolContextWindowStatusText"
+                                           Text="正在检测…"
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontSize="11"
+                                           HorizontalAlignment="Right"
+                                           Margin="0,0,0,6"
+                                           TextWrapping="Wrap"
+                                           MaxWidth="300"
+                                           AutomationProperties.LiveSetting="Polite" />
+                                <Button x:Name="ToggleSolContextWindowButton"
+                                        Content="启用并重启 Codex"
+                                        Tag="&#xE895;"
+                                        Style="{StaticResource SecondaryButton}"
+                                        HorizontalAlignment="Right"
+                                        Click="ToggleSolContextWindowButton_Click" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="6"
+                            BorderBrush="{DynamicResource BorderBrush}"
+                            BorderThickness="0,0,0,1"
+                            Padding="0,16">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Margin="0,0,20,0">
                                 <TextBlock x:Name="LunaWorkerTitleText"
                                            Text="Luna 任务 Agent"
                                            FontWeight="SemiBold"
@@ -1218,7 +1261,7 @@
                         </Grid>
                     </Border>
 
-                    <Border Grid.Row="6"
+                    <Border Grid.Row="7"
                             BorderBrush="{DynamicResource BorderBrush}"
                             BorderThickness="0,0,0,1"
                             Padding="0,16">
@@ -1258,7 +1301,7 @@
                         </Grid>
                     </Border>
 
-                    <Grid Grid.Row="7" Margin="0,20,0,0">
+                    <Grid Grid.Row="8" Margin="0,20,0,0">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
@@ -1273,7 +1316,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Margin="0,0,20,0">
                                 <TextBlock x:Name="SettingsVersionText"
-                                           Text="Codex Provider Switcher v1.4.3"
+                                           Text="Codex Provider Switcher v1.4.4"
                                            FontWeight="SemiBold"
                                            FontSize="13" />
                                 <TextBlock x:Name="SettingsStorageDescriptionText"

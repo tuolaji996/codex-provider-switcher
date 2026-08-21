@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -8,6 +9,13 @@ public sealed partial class ConfigService
     public const string EnabledReasoningEffortsKey = "enabled-reasoning-efforts";
     public const string SolUltraVisibilityKey = "show-ultra-in-model-picker-slider";
     public const string ModelCatalogJsonKey = "model_catalog_json";
+    public const string ModelContextWindowKey = "model_context_window";
+    public const string ModelAutoCompactTokenLimitKey =
+        "model_auto_compact_token_limit";
+    public const long RecommendedSolContextWindow = 1_000_000;
+    public const long RecommendedSolAutoCompactTokenLimit = 900_000;
+    public const string SolContextWindowManagedComment =
+        "# Managed by Codex Provider Switcher: GPT-5.6 Sol 1M context window.";
 
     private const string ManagedComment =
         "# Managed by Codex Provider Switcher. Keep this provider ID stable so all chats share one history.";
@@ -177,6 +185,123 @@ public sealed partial class ConfigService
         return SetSolUltraVisibility(true, configPath);
     }
 
+    public SolContextWindowStatus ReadSolContextWindowStatus(string? path = null)
+    {
+        path ??= AppPaths.ConfigPath;
+        return File.Exists(path)
+            ? ParseSolContextWindowStatus(File.ReadAllText(path))
+            : new SolContextWindowStatus(
+                SolContextWindowMode.Default,
+                null,
+                null,
+                false);
+    }
+
+    public SolContextWindowStatus ParseSolContextWindowStatus(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        var assignments = ScanSolContextWindowAssignments(
+            text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'));
+        var contextWindow = assignments.ContextWindows.Count == 0
+            ? null
+            : assignments.ContextWindows[0];
+        var autoCompactTokenLimit = assignments.AutoCompactTokenLimits.Count == 0
+            ? null
+            : assignments.AutoCompactTokenLimits[0];
+
+        if (assignments.ContextWindows.Count == 0 &&
+            assignments.AutoCompactTokenLimits.Count == 0)
+        {
+            return new SolContextWindowStatus(
+                SolContextWindowMode.Default,
+                null,
+                null,
+                assignments.Managed);
+        }
+
+        var mode = assignments.ContextWindows.Count == 1 &&
+                   assignments.AutoCompactTokenLimits.Count == 1 &&
+                   contextWindow == RecommendedSolContextWindow &&
+                   autoCompactTokenLimit == RecommendedSolAutoCompactTokenLimit
+            ? SolContextWindowMode.Recommended
+            : SolContextWindowMode.Custom;
+
+        return new SolContextWindowStatus(
+            mode,
+            contextWindow,
+            autoCompactTokenLimit,
+            assignments.Managed);
+    }
+
+    public string BuildSolContextWindowConfig(string original, bool enabled) =>
+        BuildSolContextWindowConfig(original, enabled, replaceCustom: false);
+
+    public string? SetSolContextWindow(
+        bool enabled,
+        string? path = null,
+        bool replaceCustom = false)
+    {
+        path ??= AppPaths.ConfigPath;
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException(
+                Localizer.Text(
+                    "\u672a\u627e\u5230 Codex config.toml\u3002",
+                    "Codex config.toml was not found."),
+                path);
+        }
+
+        var original = File.ReadAllText(path);
+        var updated = BuildSolContextWindowConfig(
+            original,
+            enabled,
+            replaceCustom);
+        if (string.Equals(updated, original, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var backupFolder = CreateBackup(path);
+        var wroteConfig = false;
+        try
+        {
+            WriteConfig(updated, path);
+            wroteConfig = true;
+            var readBack = File.ReadAllText(path);
+            var verifiedStatus = ParseSolContextWindowStatus(readBack);
+            var verified = string.Equals(readBack, updated, StringComparison.Ordinal) &&
+                           (enabled
+                               ? verifiedStatus.IsRecommended && verifiedStatus.Managed
+                               : verifiedStatus.Mode == SolContextWindowMode.Default &&
+                                 !verifiedStatus.Managed);
+            if (!verified)
+            {
+                throw new InvalidOperationException(
+                    "Post-write verification failed for the Sol context window settings.");
+            }
+
+            return backupFolder;
+        }
+        catch (Exception exception) when (wroteConfig)
+        {
+            try
+            {
+                WriteConfig(original, path);
+            }
+            catch (Exception rollbackException)
+            {
+                throw new AggregateException(
+                    "The Sol context window update failed and the original configuration could not be restored.",
+                    exception,
+                    rollbackException);
+            }
+
+            throw new InvalidOperationException(
+                "The Sol context window update failed and the original configuration was restored.",
+                exception);
+        }
+    }
+
     public string BuildOfficialConfig(
         string original,
         string officialModel,
@@ -331,6 +456,210 @@ public sealed partial class ConfigService
         return fullPath.Replace('\\', '/');
     }
 
+    private string BuildSolContextWindowConfig(
+        string original,
+        bool enabled,
+        bool replaceCustom)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        var status = ParseSolContextWindowStatus(original);
+
+        if (enabled)
+        {
+            var model = ReadTopLevelString(original, "model");
+            if (!IsSolModel(model))
+            {
+                throw new InvalidOperationException(
+                    Localizer.Text(
+                        "1M \u4e0a\u4e0b\u6587\u4ec5\u80fd\u5728\u5f53\u524d\u6a21\u578b\u4e3a gpt-5.6-sol \u65f6\u542f\u7528\u3002",
+                        "The 1M context window can only be enabled when the current model is gpt-5.6-sol."));
+            }
+
+            if (status.Mode == SolContextWindowMode.Recommended)
+            {
+                return original;
+            }
+
+            if (status.Mode == SolContextWindowMode.Custom && !replaceCustom)
+            {
+                throw CreateCustomSolContextWindowException();
+            }
+
+            return RewriteSolContextWindowAssignments(original, enabled: true);
+        }
+
+        if (status.Mode == SolContextWindowMode.Default)
+        {
+            return status.Managed
+                ? RewriteSolContextWindowAssignments(original, enabled: false)
+                : original;
+        }
+
+        if (status.Mode == SolContextWindowMode.Custom && !replaceCustom)
+        {
+            throw CreateCustomSolContextWindowException();
+        }
+
+        return RewriteSolContextWindowAssignments(original, enabled: false);
+    }
+
+    private static InvalidOperationException CreateCustomSolContextWindowException() =>
+        new(Localizer.Text(
+            "\u5df2\u5b58\u5728\u7528\u6237\u81ea\u5b9a\u4e49\u7684\u4e0a\u4e0b\u6587\u8bbe\u7f6e\uff1b\u672a\u6539\u52a8\u914d\u7f6e\u3002",
+            "User-defined context window settings already exist; the configuration was not changed."));
+
+    private static string RewriteSolContextWindowAssignments(
+        string original,
+        bool enabled)
+    {
+        var newline = original.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var lines = original
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n')
+            .ToList();
+        RemoveSolContextWindowAssignments(lines);
+
+        if (enabled)
+        {
+            var insertionIndex = lines.FindIndex(line => ParseSectionName(line) is not null);
+            if (insertionIndex < 0)
+            {
+                insertionIndex = lines.Count;
+                while (insertionIndex > 0 &&
+                       string.IsNullOrWhiteSpace(lines[insertionIndex - 1]))
+                {
+                    insertionIndex--;
+                }
+            }
+
+            lines.InsertRange(
+                insertionIndex,
+                new[]
+                {
+                    SolContextWindowManagedComment,
+                    $"{ModelContextWindowKey} = {RecommendedSolContextWindow}",
+                    $"{ModelAutoCompactTokenLimitKey} = {RecommendedSolAutoCompactTokenLimit}"
+                });
+        }
+
+        return string.Join(newline, lines);
+    }
+
+    private static void RemoveSolContextWindowAssignments(List<string> lines)
+    {
+        for (var index = 0; index < lines.Count;)
+        {
+            if (ParseSectionName(lines[index]) is not null)
+            {
+                break;
+            }
+
+            if (lines[index].Trim().Equals(
+                    SolContextWindowManagedComment,
+                    StringComparison.Ordinal) ||
+                IsAssignment(lines[index], ModelContextWindowKey) ||
+                IsAssignment(lines[index], ModelAutoCompactTokenLimitKey))
+            {
+                lines.RemoveAt(index);
+                continue;
+            }
+
+            index++;
+        }
+    }
+
+    private static void RemoveManagedSolContextWindowForNonSol(
+        List<string> lines,
+        string targetModel)
+    {
+        if (IsSolModel(targetModel))
+        {
+            return;
+        }
+
+        var assignments = ScanSolContextWindowAssignments(lines);
+        if (assignments.Managed &&
+            assignments.ContextWindows.Count == 1 &&
+            assignments.ContextWindows[0] == RecommendedSolContextWindow &&
+            assignments.AutoCompactTokenLimits.Count == 1 &&
+            assignments.AutoCompactTokenLimits[0] == RecommendedSolAutoCompactTokenLimit)
+        {
+            RemoveSolContextWindowAssignments(lines);
+        }
+    }
+
+    private static SolContextWindowAssignments ScanSolContextWindowAssignments(
+        IEnumerable<string> lines)
+    {
+        var contextWindows = new List<long?>();
+        var autoCompactTokenLimits = new List<long?>();
+        var managed = false;
+
+        foreach (var line in lines)
+        {
+            if (ParseSectionName(line) is not null)
+            {
+                break;
+            }
+
+            if (line.Trim().Equals(
+                    SolContextWindowManagedComment,
+                    StringComparison.Ordinal))
+            {
+                managed = true;
+            }
+            else if (IsAssignment(line, ModelContextWindowKey))
+            {
+                contextWindows.Add(ReadLongFromAssignment(line));
+            }
+            else if (IsAssignment(line, ModelAutoCompactTokenLimitKey))
+            {
+                autoCompactTokenLimits.Add(ReadLongFromAssignment(line));
+            }
+        }
+
+        return new SolContextWindowAssignments(
+            contextWindows,
+            autoCompactTokenLimits,
+            managed);
+    }
+
+    private static long? ReadLongFromAssignment(string line)
+    {
+        var equals = line.IndexOf('=');
+        if (equals < 0)
+        {
+            return null;
+        }
+
+        var value = line[(equals + 1)..];
+        var comment = value.IndexOf('#');
+        if (comment >= 0)
+        {
+            value = value[..comment];
+        }
+
+        value = value.Trim().Replace("_", string.Empty, StringComparison.Ordinal);
+        return long.TryParse(
+            value,
+            NumberStyles.AllowLeadingSign,
+            CultureInfo.InvariantCulture,
+            out var parsed)
+            ? parsed
+            : null;
+    }
+
+    public static bool IsSolModel(string? model) =>
+        string.Equals(
+            model?.Trim(),
+            AppPaths.DefaultOfficialModel,
+            StringComparison.OrdinalIgnoreCase);
+
+    private sealed record SolContextWindowAssignments(
+        IReadOnlyList<long?> ContextWindows,
+        IReadOnlyList<long?> AutoCompactTokenLimits,
+        bool Managed);
+
     private static string Rewrite(
         string original,
         string model,
@@ -353,6 +682,8 @@ public sealed partial class ConfigService
         {
             EnsureManagedModelCatalogAssignment(lines, modelCatalogJson);
         }
+
+        RemoveManagedSolContextWindowForNonSol(lines, model);
 
         UpsertTopLevel(lines, "model_provider", $"\"{AppPaths.StableProviderId}\"");
         UpsertTopLevel(lines, "model", $"\"{EscapeToml(model.Trim())}\"");
@@ -765,13 +1096,79 @@ public sealed partial class ConfigService
     private static string? ParseSectionName(string line)
     {
         var trimmed = line.Trim();
-        if (!trimmed.StartsWith("[", StringComparison.Ordinal) ||
-            !trimmed.EndsWith("]", StringComparison.Ordinal))
+        if (!trimmed.StartsWith("[", StringComparison.Ordinal))
         {
             return null;
         }
 
-        return trimmed.Trim('[', ']').Trim();
+        var isArrayTable = trimmed.StartsWith("[[", StringComparison.Ordinal);
+        var contentStart = isArrayTable ? 2 : 1;
+        var inBasicString = false;
+        var inLiteralString = false;
+        var escaped = false;
+
+        for (var index = contentStart; index < trimmed.Length; index++)
+        {
+            var character = trimmed[index];
+            if (inBasicString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (character == '\\')
+                {
+                    escaped = true;
+                }
+                else if (character == '"')
+                {
+                    inBasicString = false;
+                }
+
+                continue;
+            }
+
+            if (inLiteralString)
+            {
+                if (character == '\'')
+                {
+                    inLiteralString = false;
+                }
+
+                continue;
+            }
+
+            if (character == '"')
+            {
+                inBasicString = true;
+                continue;
+            }
+
+            if (character == '\'')
+            {
+                inLiteralString = true;
+                continue;
+            }
+
+            if (character != ']' ||
+                (isArrayTable &&
+                 (index + 1 >= trimmed.Length || trimmed[index + 1] != ']')))
+            {
+                continue;
+            }
+
+            var closingLength = isArrayTable ? 2 : 1;
+            var trailing = trimmed[(index + closingLength)..].TrimStart();
+            if (trailing.Length > 0 && trailing[0] != '#')
+            {
+                return null;
+            }
+
+            var name = trimmed[contentStart..index].Trim();
+            return name.Length == 0 ? null : name;
+        }
+
+        return null;
     }
 
     private static string EscapeToml(string value) =>

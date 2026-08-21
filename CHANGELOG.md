@@ -4,6 +4,27 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.4.4] - 2026-08-20
+
+### Added
+
+- Settings now exposes a bilingual **Sol 1M context** action that writes the
+  documented top-level `model_context_window = 1000000` and
+  `model_auto_compact_token_limit = 900000` values with a timestamped backup,
+  read-back verification, a Codex restart, and a clear new-task reminder.
+- The Settings status distinguishes Codex defaults, the recommended 1M/900K
+  pair, and pre-existing custom context values instead of treating every
+  numeric override as tool-owned.
+
+### Safety
+
+- The switcher marks only the recommended Sol values it writes. Switching to a
+  non-Sol model removes that managed pair, while user-owned context overrides
+  remain untouched.
+- Enabling the preset is limited to `gpt-5.6-sol`. A third-party route using
+  that model ID must still support the actual context size; the switcher does
+  not turn an incompatible upstream into a one-million-token provider.
+
 ## [1.4.3] - 2026-08-12
 
 ### Changed

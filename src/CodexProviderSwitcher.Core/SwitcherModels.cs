@@ -9,6 +9,22 @@ public enum ProviderMode
     ThirdParty
 }
 
+public enum SolContextWindowMode
+{
+    Default,
+    Recommended,
+    Custom
+}
+
+public sealed record SolContextWindowStatus(
+    SolContextWindowMode Mode,
+    long? ContextWindow,
+    long? AutoCompactTokenLimit,
+    bool Managed)
+{
+    public bool IsRecommended => Mode == SolContextWindowMode.Recommended;
+}
+
 public sealed record ConfigStatus(
     ProviderMode Mode,
     string ProviderId,
