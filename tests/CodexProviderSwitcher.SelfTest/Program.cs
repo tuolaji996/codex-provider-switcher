@@ -1322,10 +1322,15 @@ var customProviderSolContext = service.BuildThirdPartyConfig(
     "https://provider.example/v1",
     @"C:\Users\Test\AppData\Local\Programs\CodexProviderSwitcher\CodexProviderToken.exe",
     profileCredentialTarget);
+var expectedNativeBrokerCommand =
+    "command = \"C:\\\\Users\\\\Test\\\\AppData\\\\Local\\\\Programs\\\\CodexProviderSwitcher\\\\CodexProviderToken.exe\"";
 Check(
     service.ParseSolContextWindowStatus(customProviderSolContext) is
         { Mode: SolContextWindowMode.Recommended, Managed: true },
     "A custom provider using Sol lost the managed context settings.");
+Check(
+    customProviderSolContext.Contains(expectedNativeBrokerCommand, StringComparison.Ordinal),
+    "A direct custom provider did not retain the native Windows token broker path.");
 var thirdParty = service.BuildThirdPartyConfig(
     original,
     "codex-auto-review",
@@ -1345,13 +1350,12 @@ Check(
         StringComparison.Ordinal),
     "The selected provider credential target was not written to config.toml.");
 Check(
-    thirdParty.Contains(
-        "command = \"/mnt/c/Users/Test/AppData/Local/Programs/CodexProviderSwitcher/CodexProviderToken.exe\"",
-        StringComparison.Ordinal),
-    "Windows token broker path was not converted to WSL.");
+    thirdParty.Contains(expectedNativeBrokerCommand, StringComparison.Ordinal),
+    "Windows token broker path was not emitted as a native Windows command.");
 Check(
+    thirdParty.Contains("[model_providers.OpenAI.auth]", StringComparison.Ordinal) &&
     !thirdParty.Contains("requires_openai_auth = true", StringComparison.Ordinal),
-    "Official auth remained enabled in third-party mode.");
+    "Third-party config combined .auth with requires_openai_auth.");
 Check(
     thirdParty.Contains("[mcp_servers.sample]", StringComparison.Ordinal),
     "Unrelated MCP configuration was removed.");
@@ -1415,8 +1419,9 @@ Check(officialStatus.ReviewModel == "gpt-5.5", "Official review model was not re
 Check(officialStatus.BaseUrl is null, "Third-party Base URL leaked into official mode.");
 Check(officialStatus.UsesOfficialAuthentication, "Official authentication was not enabled.");
 Check(
+    official.Contains("requires_openai_auth = true", StringComparison.Ordinal) &&
     !official.Contains("[model_providers.OpenAI.auth]", StringComparison.Ordinal),
-    "Third-party auth helper remained in official mode.");
+    "Official auth configuration was not kept separate from the .auth helper.");
 Check(
     official.Contains("[features]", StringComparison.Ordinal) &&
     official.Contains("image_generation = true", StringComparison.Ordinal),
@@ -1769,6 +1774,9 @@ Check(
         $"model_catalog_json = \"{AppPaths.KimiModelCatalogFileName}\"",
         StringComparison.Ordinal),
     "A direct Sol route retained the K3 loopback router or model catalog.");
+Check(
+    directSolFromKimiConfig.Contains(expectedNativeBrokerCommand, StringComparison.Ordinal),
+    "A direct provider recovered from K3 did not use the native Windows token broker path.");
 
 var userCatalogConfig =
     "model_catalog_json = \"user-owned-catalog.json\"\n" + original;

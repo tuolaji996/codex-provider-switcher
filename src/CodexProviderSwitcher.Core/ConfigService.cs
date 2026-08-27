@@ -343,7 +343,7 @@ public sealed partial class ConfigService
     {
         ProviderAvailabilityPolicy.RequireAvailableThirdPartyRoute(baseUrl, model);
         var normalizedBaseUrl = NormalizeBaseUrl(baseUrl);
-        var brokerWslPath = ToWslPath(tokenBrokerWindowsPath);
+        var brokerWindowsPath = Path.GetFullPath(tokenBrokerWindowsPath);
         credentialTarget = CredentialTargetFactory.RequireValid(credentialTarget);
         var managedBlock = $"""
             {ManagedComment}
@@ -353,7 +353,7 @@ public sealed partial class ConfigService
             wire_api = "responses"
 
             [model_providers.{AppPaths.StableProviderId}.auth]
-            command = "{EscapeToml(brokerWslPath)}"
+            command = "{EscapeToml(brokerWindowsPath)}"
             args = ["--credential-target", "{EscapeToml(credentialTarget)}"]
             timeout_ms = 5000
             refresh_interval_ms = 0

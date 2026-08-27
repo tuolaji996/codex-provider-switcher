@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-08-27
+
+### Fixed
+
+- Direct third-party configurations now invoke the token broker through its
+  escaped native Windows absolute path, preserving Credential Manager-backed
+  authentication for the native Codex app-server.
+
 ## [1.4.4] - 2026-08-20
 
 ### Added

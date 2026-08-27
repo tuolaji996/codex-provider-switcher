@@ -76,7 +76,7 @@ including multiple keys for the same SuiXiang Base URL.
 
 ## Interface
 
-Version 1.4.4 uses a compact native Windows workspace:
+Version 1.4.5 uses a compact native Windows workspace:
 
 - **Home:** current route, shared-history health, and quick switching.
 - **Providers:** official OpenAI and third-party endpoint, model, and key
@@ -263,7 +263,7 @@ already included on the target machine. A .NET 8 SDK is needed only to build.
 To create the versioned ZIP and SHA-256 file used by GitHub Releases:
 
 ```powershell
-.\release.ps1 -Version 1.4.4 -DotNet "C:\path\to\dotnet.exe"
+.\release.ps1 -Version 1.4.5 -DotNet "C:\path\to\dotnet.exe"
 ```
 
 The installed files are placed in:
