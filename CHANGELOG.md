@@ -4,6 +4,21 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.4.6] - 2026-09-12
+
+### Added
+
+- The one-click 1M context preset now supports both `gpt-5.6-sol` and
+  `gpt-5.6-terra`, using the existing 1,000,000 context and 900,000
+  auto-compaction values.
+
+### Safety
+
+- Existing v1.4.4/v1.4.5 Sol-only managed markers remain recognized. Switching
+  between Sol and Terra preserves the managed preset; switching to an
+  unsupported model removes only the tool-managed recommended pair and leaves
+  user-owned context overrides untouched.
+
 ## [1.4.5] - 2026-08-27
 
 ### Fixed

@@ -1065,7 +1065,7 @@ Check(
     "A commented TOML table header was not treated as the top-level boundary.");
 var cleanedBeforeCommentedSection = service.BuildOfficialConfig(
     enabledBeforeCommentedSection,
-    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     null);
 Check(
     service.ParseSolContextWindowStatus(cleanedBeforeCommentedSection).Mode ==
@@ -1110,21 +1110,38 @@ catch (InvalidOperationException)
 }
 Check(customBuildRejected, "A custom Sol context configuration was overwritten by default.");
 
-var nonSolEnableRejected = false;
+var terraContextBase = solContextBase.Replace(
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    StringComparison.Ordinal);
+var managedTerraContext = service.BuildSolContextWindowConfig(
+    terraContextBase,
+    enabled: true);
+Check(
+    service.ParseSolContextWindowStatus(managedTerraContext) is
+    { Mode: SolContextWindowMode.Recommended, Managed: true } &&
+    ConfigService.IsOneMillionContextModel("gpt-5.6-sol") &&
+    ConfigService.IsOneMillionContextModel(" GPT-5.6-TERRA ") &&
+    !ConfigService.IsOneMillionContextModel("gpt-5.6-luna"),
+    "The 1M context option did not recognize both Sol and Terra exclusively.");
+
+var unsupportedModelEnableRejected = false;
 try
 {
     _ = service.BuildSolContextWindowConfig(
         solContextBase.Replace(
             "gpt-5.6-sol",
-            "gpt-5.6-terra",
+            "gpt-5.6-luna",
             StringComparison.Ordinal),
         enabled: true);
 }
 catch (InvalidOperationException)
 {
-    nonSolEnableRejected = true;
+    unsupportedModelEnableRejected = true;
 }
-Check(nonSolEnableRejected, "The 1M context option was enabled for a non-Sol model.");
+Check(
+    unsupportedModelEnableRejected,
+    "The 1M context option was enabled for an unsupported model.");
 
 var disabledManagedSolContext = service.BuildSolContextWindowConfig(
     managedSolContext,
@@ -1151,11 +1168,19 @@ var preservedManagedForSol = service.BuildOfficialConfig(
     "gpt-5.5");
 Check(
     service.ParseSolContextWindowStatus(preservedManagedForSol) is
-        { Mode: SolContextWindowMode.Recommended, Managed: true },
+    { Mode: SolContextWindowMode.Recommended, Managed: true },
     "A provider rewrite targeting Sol removed the managed context settings.");
-var cleanedManagedForNonSol = service.BuildOfficialConfig(
+var preservedManagedForTerra = service.BuildOfficialConfig(
     managedSolContext,
     "gpt-5.6-terra",
+    null);
+Check(
+    service.ParseSolContextWindowStatus(preservedManagedForTerra) is
+    { Mode: SolContextWindowMode.Recommended, Managed: true },
+    "A provider rewrite targeting Terra removed the managed context settings.");
+var cleanedManagedForNonSol = service.BuildOfficialConfig(
+    managedSolContext,
+    "gpt-5.6-luna",
     null);
 Check(
     service.ParseSolContextWindowStatus(cleanedManagedForNonSol).Mode ==
@@ -1166,11 +1191,11 @@ Check(
     "A provider rewrite targeting non-Sol retained the managed recommended pair.");
 var preservedUserOwnedForNonSol = service.BuildOfficialConfig(
     userOwnedRecommendedContext,
-    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     null);
 Check(
     service.ParseSolContextWindowStatus(preservedUserOwnedForNonSol) is
-        { Mode: SolContextWindowMode.Recommended, Managed: false },
+    { Mode: SolContextWindowMode.Recommended, Managed: false },
     "A provider rewrite removed a user-owned recommended pair.");
 var managedCustomSolContext =
     ConfigService.SolContextWindowManagedComment + "\r\n" +
@@ -1179,12 +1204,39 @@ var managedCustomSolContext =
     solContextBase;
 var preservedCustomForNonSol = service.BuildOfficialConfig(
     managedCustomSolContext,
-    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     null);
 Check(
     service.ParseSolContextWindowStatus(preservedCustomForNonSol) is
-        { Mode: SolContextWindowMode.Custom, Managed: true },
+    { Mode: SolContextWindowMode.Custom, Managed: true },
     "A provider rewrite removed custom context settings carrying a stale marker.");
+
+var legacyManagedSolContext = managedSolContext.Replace(
+    ConfigService.OneMillionContextWindowManagedComment,
+    ConfigService.LegacySolContextWindowManagedComment,
+    StringComparison.Ordinal);
+Check(
+    service.ParseSolContextWindowStatus(legacyManagedSolContext) is
+    { Mode: SolContextWindowMode.Recommended, Managed: true },
+    "The v1.4.4 Sol-only managed marker was not recognized after the Terra upgrade.");
+var legacyPreservedForTerra = service.BuildOfficialConfig(
+    legacyManagedSolContext,
+    "gpt-5.6-terra",
+    null);
+Check(
+    service.ParseSolContextWindowStatus(legacyPreservedForTerra) is
+    { Mode: SolContextWindowMode.Recommended, Managed: true },
+    "A Terra switch removed the legacy managed Sol 1M settings.");
+var legacyDisabled = service.BuildSolContextWindowConfig(
+    legacyManagedSolContext,
+    enabled: false);
+Check(
+    service.ParseSolContextWindowStatus(legacyDisabled) is
+    { Mode: SolContextWindowMode.Default, Managed: false } &&
+    !legacyDisabled.Contains(
+        ConfigService.LegacySolContextWindowManagedComment,
+        StringComparison.Ordinal),
+    "Restoring defaults did not remove the legacy Sol-only managed marker.");
 
 var solContextConfigRoot = Path.Combine(
     Path.GetTempPath(),
@@ -1207,7 +1259,7 @@ try
         File.ReadAllText(Path.Combine(enableBackup, "config.toml")) ==
             solContextBase &&
         service.ReadSolContextWindowStatus(solContextConfigPath) is
-            { Mode: SolContextWindowMode.Recommended, Managed: true },
+        { Mode: SolContextWindowMode.Recommended, Managed: true },
         "The Sol context update did not create an exact backup and verify the written values.");
     Check(
         service.SetSolContextWindow(
@@ -1246,7 +1298,7 @@ try
         File.ReadAllText(Path.Combine(replaceBackup, "config.toml")) ==
             partialSolContext &&
         service.ReadSolContextWindowStatus(solContextConfigPath) is
-            { Mode: SolContextWindowMode.Recommended, Managed: true },
+        { Mode: SolContextWindowMode.Recommended, Managed: true },
         "Explicit custom replacement did not write, back up, and verify the recommended settings.");
 
     var disableBackup = service.SetSolContextWindow(
@@ -1259,7 +1311,7 @@ try
     Check(
         disableBackup is not null &&
         service.ReadSolContextWindowStatus(solContextConfigPath) is
-            { Mode: SolContextWindowMode.Default, Managed: false },
+        { Mode: SolContextWindowMode.Default, Managed: false },
         "Disabling the managed Sol context settings did not pass read-back verification.");
 
     File.WriteAllText(solContextConfigPath, managedCustomSolContext);
@@ -1290,7 +1342,7 @@ try
     Check(
         customDisableBackup is not null &&
         service.ReadSolContextWindowStatus(solContextConfigPath) is
-            { Mode: SolContextWindowMode.Default, Managed: false },
+        { Mode: SolContextWindowMode.Default, Managed: false },
         "Explicit custom removal did not clear and verify both context settings.");
 }
 finally
@@ -1326,7 +1378,7 @@ var expectedNativeBrokerCommand =
     "command = \"C:\\\\Users\\\\Test\\\\AppData\\\\Local\\\\Programs\\\\CodexProviderSwitcher\\\\CodexProviderToken.exe\"";
 Check(
     service.ParseSolContextWindowStatus(customProviderSolContext) is
-        { Mode: SolContextWindowMode.Recommended, Managed: true },
+    { Mode: SolContextWindowMode.Recommended, Managed: true },
     "A custom provider using Sol lost the managed context settings.");
 Check(
     customProviderSolContext.Contains(expectedNativeBrokerCommand, StringComparison.Ordinal),

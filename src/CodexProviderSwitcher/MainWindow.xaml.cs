@@ -602,7 +602,7 @@ public partial class MainWindow : Window
         _solContextWindowUsesThirdPartyRoute =
             configStatus.Mode == ProviderMode.ThirdParty;
         _solContextWindowAppliesToCurrentModel =
-            ConfigService.IsSolModel(configStatus.Model);
+            ConfigService.IsOneMillionContextModel(configStatus.Model);
         UpdateSolContextWindowStatus();
     }
 
@@ -614,13 +614,15 @@ public partial class MainWindow : Window
                 ? T("未设置", "not set")
                 : _solContextWindowCurrentModel;
             SolContextWindowStatusText.Text = F(
-                "仅支持 gpt-5.6-sol（当前：{0}）",
-                "GPT-5.6 Sol only (current: {0})",
+                "仅支持 gpt-5.6-sol / gpt-5.6-terra（当前：{0}）",
+                "GPT-5.6 Sol / Terra only (current: {0})",
                 currentModel);
-            ToggleSolContextWindowButton.Content = T("仅限 Sol", "Sol only");
+            ToggleSolContextWindowButton.Content = T(
+                "仅限 Sol / Terra",
+                "Sol / Terra only");
             ToggleSolContextWindowButton.ToolTip = T(
-                "请先将当前模型切换为 gpt-5.6-sol。",
-                "Switch the active model to gpt-5.6-sol first.");
+                "请先将当前模型切换为 gpt-5.6-sol 或 gpt-5.6-terra。",
+                "Switch the active model to gpt-5.6-sol or gpt-5.6-terra first.");
             ToggleSolContextWindowButton.IsEnabled = false;
             return;
         }
@@ -794,12 +796,13 @@ public partial class MainWindow : Window
             RefreshBackups();
             OperationStatusText.Text = F(
                 enable
-                    ? "Sol 百万上下文已启用并重启 Codex；请新建任务使用完整窗口。备份：{0}"
-                    : "Sol 上下文已恢复为 Codex 默认值并重启；请新建任务。备份：{0}",
+                    ? "{1} 百万上下文已启用并重启 Codex；请新建任务使用完整窗口。备份：{0}"
+                    : "{1} 上下文已恢复为 Codex 默认值并重启；请新建任务。备份：{0}",
                 enable
-                    ? "Sol 1M context is enabled and Codex was restarted; start a new task to use the full window. Backup: {0}"
-                    : "Sol context was restored to Codex defaults and restarted; start a new task. Backup: {0}",
-                backupFolder ?? T("无需写入", "No write needed"));
+                    ? "{1} 1M context is enabled and Codex was restarted; start a new task to use the full window. Backup: {0}"
+                    : "{1} context was restored to Codex defaults and restarted; start a new task. Backup: {0}",
+                backupFolder ?? T("无需写入", "No write needed"),
+                _solContextWindowCurrentModel ?? T("当前模型", "Current model"));
         });
 
         RefreshSolContextWindowSetting();
@@ -3808,11 +3811,11 @@ public partial class MainWindow : Window
             "简体中文 Codex 会把 xhigh 和 Ultra 都显示为“极高”。Ultra 是菜单最底部带“更快消耗使用额度”的一项；Luna Agent 仍使用 Max。",
             "Simplified Chinese Codex labels both xhigh and Ultra as 'Extremely high'. Ultra is the bottom item with the faster usage warning; the Luna task agent remains on Max.");
         SolContextWindowTitleText.Text = T(
-            "Sol 百万上下文",
-            "Sol 1M context");
+            "Sol / Terra 百万上下文",
+            "Sol / Terra 1M context");
         SolContextWindowDescriptionText.Text = T(
-            "仅用于 gpt-5.6-sol。使用 1,000,000 上下文和 900,000 自动压缩；重启后请新建任务，第三方实际上限仍由供应商决定。",
-            "For gpt-5.6-sol only. Uses 1,000,000 context and 900,000 auto-compaction; start a new task after restart, and verify the provider supports the actual limit.");
+            "支持 gpt-5.6-sol 和 gpt-5.6-terra。使用 1,000,000 上下文和 900,000 自动压缩；重启后请新建任务，第三方实际上限仍由供应商决定。",
+            "Supports gpt-5.6-sol and gpt-5.6-terra. Uses 1,000,000 context and 900,000 auto-compaction; start a new task after restart, and verify the provider supports the actual limit.");
         LunaWorkerTitleText.Text = T(
             "Luna 任务 Agent",
             "Luna task agent");
@@ -3875,7 +3878,7 @@ public partial class MainWindow : Window
 
     private static Version CurrentApplicationVersion() =>
         GitHubReleaseUpdateService.NormalizeVersion(
-            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 4, 4));
+            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 4, 6));
 
     private Brush ResourceBrush(string key) =>
         (Brush)FindResource(key);

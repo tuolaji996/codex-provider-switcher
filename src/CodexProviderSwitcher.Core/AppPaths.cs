@@ -28,6 +28,7 @@ public static class AppPaths
     public const string KimiWslLauncherFileName = "codex-provider-kimi-launcher.sh";
     public const int KimiAuthRefreshIntervalMilliseconds = 30000;
     public const string DefaultOfficialModel = "gpt-5.6-sol";
+    public const string TerraModel = "gpt-5.6-terra";
     public const string CodexAppId = "OpenAI.Codex_2p2nqsd0c76g0!App";
 
     public static string UserProfile =>

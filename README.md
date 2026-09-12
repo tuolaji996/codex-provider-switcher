@@ -76,7 +76,7 @@ including multiple keys for the same SuiXiang Base URL.
 
 ## Interface
 
-Version 1.4.5 uses a compact native Windows workspace:
+Version 1.4.6 uses a compact native Windows workspace:
 
 - **Home:** current route, shared-history health, and quick switching.
 - **Providers:** official OpenAI and third-party endpoint, model, and key
@@ -85,8 +85,8 @@ Version 1.4.5 uses a compact native Windows workspace:
   Mobile Remote prerequisites.
 - **Backups:** a read-only table of every timestamped `config.toml` backup.
 - **Settings:** language, appearance, restart behavior, Sol Ultra readiness,
-  Sol 1M context, optional Luna task agent, automatic update status, and local
-  data access.
+  Sol/Terra 1M context, optional Luna task agent, automatic update status, and
+  local data access.
 
 The experimental SuiXiang K3 route is retired in v1.4.3. It is hidden from new
 setup, model discovery, and the saved-account picker, and core validation blocks
@@ -193,28 +193,30 @@ switcher does not write `model_reasoning_effort = "ultra"`, change the selected
 model, or modify chat history. In Simplified Chinese Codex, the bottom `极高`
 option with the `更快消耗使用额度` warning is Ultra.
 
-## Sol 1M context
+## Sol / Terra 1M context
 
 Settings can apply the recommended one-million-token Codex configuration for
-`gpt-5.6-sol` with one action:
+`gpt-5.6-sol` or `gpt-5.6-terra` with one action:
 
 ```toml
 model_context_window = 1000000
 model_auto_compact_token_limit = 900000
 ```
 
-The context window value stays below Sol's documented 1,050,000-token maximum,
-and the 900,000-token compaction threshold leaves headroom for a response and
-tool output. The action stops Codex, creates a timestamped `config.toml`
-backup, writes and verifies both top-level values, then starts Codex again.
-Start a new Codex task after the restart so the new context budget is used.
-Restoring Codex defaults removes the managed pair through the same transaction.
+The context window value stays below the documented 1,050,000-token maximum
+for GPT-5.6 Sol and Terra, and the 900,000-token compaction threshold leaves
+headroom for a response and tool output. The action stops Codex, creates a
+timestamped `config.toml` backup, writes and verifies both top-level values,
+then starts Codex again. Start a new Codex task after the restart so the new
+context budget is used. Restoring Codex defaults removes the managed pair
+through the same transaction.
 
 Only values written by the switcher are automatically removed when the active
-model changes away from Sol. Existing custom context values are reported as
-custom and are not silently overwritten or deleted. A third-party route named
-`gpt-5.6-sol` still depends on that provider actually supporting the full
-window; this setting changes the Codex client budget, not the upstream model.
+model changes away from Sol or Terra. Existing custom context values are
+reported as custom and are not silently overwritten or deleted. A third-party
+route named `gpt-5.6-sol` or `gpt-5.6-terra` still depends on that provider
+actually supporting the full window; this setting changes the Codex client
+budget, not the upstream model.
 
 OpenAI references:
 
@@ -224,6 +226,7 @@ OpenAI references:
 - [Image generation](https://developers.openai.com/api/docs/guides/image-generation)
 - [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
 - [GPT-5.6 Sol model](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
+- [OpenAI model context limits on Amazon Bedrock](https://developers.openai.com/api/docs/guides/amazon-bedrock#responses-api-feature-availability)
 
 ## Boundaries
 
@@ -263,7 +266,7 @@ already included on the target machine. A .NET 8 SDK is needed only to build.
 To create the versioned ZIP and SHA-256 file used by GitHub Releases:
 
 ```powershell
-.\release.ps1 -Version 1.4.5 -DotNet "C:\path\to\dotnet.exe"
+.\release.ps1 -Version 1.4.6 -DotNet "C:\path\to\dotnet.exe"
 ```
 
 The installed files are placed in:

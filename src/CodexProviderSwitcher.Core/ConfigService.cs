@@ -12,10 +12,20 @@ public sealed partial class ConfigService
     public const string ModelContextWindowKey = "model_context_window";
     public const string ModelAutoCompactTokenLimitKey =
         "model_auto_compact_token_limit";
-    public const long RecommendedSolContextWindow = 1_000_000;
-    public const long RecommendedSolAutoCompactTokenLimit = 900_000;
-    public const string SolContextWindowManagedComment =
+    public const long RecommendedOneMillionContextWindow = 1_000_000;
+    public const long RecommendedOneMillionAutoCompactTokenLimit = 900_000;
+    public const string OneMillionContextWindowManagedComment =
+        "# Managed by Codex Provider Switcher: GPT-5.6 Sol/Terra 1M context window.";
+    public const string LegacySolContextWindowManagedComment =
         "# Managed by Codex Provider Switcher: GPT-5.6 Sol 1M context window.";
+
+    // Retained as aliases so older callers and tests keep compiling while the
+    // preset now applies to both GPT-5.6 Sol and GPT-5.6 Terra.
+    public const long RecommendedSolContextWindow = RecommendedOneMillionContextWindow;
+    public const long RecommendedSolAutoCompactTokenLimit =
+        RecommendedOneMillionAutoCompactTokenLimit;
+    public const string SolContextWindowManagedComment =
+        OneMillionContextWindowManagedComment;
 
     private const string ManagedComment =
         "# Managed by Codex Provider Switcher. Keep this provider ID stable so all chats share one history.";
@@ -277,7 +287,7 @@ public sealed partial class ConfigService
             if (!verified)
             {
                 throw new InvalidOperationException(
-                    "Post-write verification failed for the Sol context window settings.");
+                    "Post-write verification failed for the 1M context window settings.");
             }
 
             return backupFolder;
@@ -291,13 +301,13 @@ public sealed partial class ConfigService
             catch (Exception rollbackException)
             {
                 throw new AggregateException(
-                    "The Sol context window update failed and the original configuration could not be restored.",
+                    "The 1M context window update failed and the original configuration could not be restored.",
                     exception,
                     rollbackException);
             }
 
             throw new InvalidOperationException(
-                "The Sol context window update failed and the original configuration was restored.",
+                "The 1M context window update failed and the original configuration was restored.",
                 exception);
         }
     }
@@ -467,12 +477,12 @@ public sealed partial class ConfigService
         if (enabled)
         {
             var model = ReadTopLevelString(original, "model");
-            if (!IsSolModel(model))
+            if (!IsOneMillionContextModel(model))
             {
                 throw new InvalidOperationException(
                     Localizer.Text(
-                        "1M \u4e0a\u4e0b\u6587\u4ec5\u80fd\u5728\u5f53\u524d\u6a21\u578b\u4e3a gpt-5.6-sol \u65f6\u542f\u7528\u3002",
-                        "The 1M context window can only be enabled when the current model is gpt-5.6-sol."));
+                        "1M 上下文仅支持 gpt-5.6-sol 或 gpt-5.6-terra。",
+                        "The 1M context window supports only gpt-5.6-sol or gpt-5.6-terra."));
             }
 
             if (status.Mode == SolContextWindowMode.Recommended)
@@ -536,9 +546,9 @@ public sealed partial class ConfigService
                 insertionIndex,
                 new[]
                 {
-                    SolContextWindowManagedComment,
-                    $"{ModelContextWindowKey} = {RecommendedSolContextWindow}",
-                    $"{ModelAutoCompactTokenLimitKey} = {RecommendedSolAutoCompactTokenLimit}"
+                    OneMillionContextWindowManagedComment,
+                    $"{ModelContextWindowKey} = {RecommendedOneMillionContextWindow}",
+                    $"{ModelAutoCompactTokenLimitKey} = {RecommendedOneMillionAutoCompactTokenLimit}"
                 });
         }
 
@@ -554,9 +564,7 @@ public sealed partial class ConfigService
                 break;
             }
 
-            if (lines[index].Trim().Equals(
-                    SolContextWindowManagedComment,
-                    StringComparison.Ordinal) ||
+            if (IsManagedOneMillionContextComment(lines[index]) ||
                 IsAssignment(lines[index], ModelContextWindowKey) ||
                 IsAssignment(lines[index], ModelAutoCompactTokenLimitKey))
             {
@@ -572,7 +580,7 @@ public sealed partial class ConfigService
         List<string> lines,
         string targetModel)
     {
-        if (IsSolModel(targetModel))
+        if (IsOneMillionContextModel(targetModel))
         {
             return;
         }
@@ -580,9 +588,9 @@ public sealed partial class ConfigService
         var assignments = ScanSolContextWindowAssignments(lines);
         if (assignments.Managed &&
             assignments.ContextWindows.Count == 1 &&
-            assignments.ContextWindows[0] == RecommendedSolContextWindow &&
+            assignments.ContextWindows[0] == RecommendedOneMillionContextWindow &&
             assignments.AutoCompactTokenLimits.Count == 1 &&
-            assignments.AutoCompactTokenLimits[0] == RecommendedSolAutoCompactTokenLimit)
+            assignments.AutoCompactTokenLimits[0] == RecommendedOneMillionAutoCompactTokenLimit)
         {
             RemoveSolContextWindowAssignments(lines);
         }
@@ -602,9 +610,7 @@ public sealed partial class ConfigService
                 break;
             }
 
-            if (line.Trim().Equals(
-                    SolContextWindowManagedComment,
-                    StringComparison.Ordinal))
+            if (IsManagedOneMillionContextComment(line))
             {
                 managed = true;
             }
@@ -654,6 +660,24 @@ public sealed partial class ConfigService
             model?.Trim(),
             AppPaths.DefaultOfficialModel,
             StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsOneMillionContextModel(string? model) =>
+        IsSolModel(model) ||
+        string.Equals(
+            model?.Trim(),
+            AppPaths.TerraModel,
+            StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsManagedOneMillionContextComment(string line)
+    {
+        var trimmed = line.Trim();
+        return trimmed.Equals(
+                   OneMillionContextWindowManagedComment,
+                   StringComparison.Ordinal) ||
+               trimmed.Equals(
+                   LegacySolContextWindowManagedComment,
+                   StringComparison.Ordinal);
+    }
 
     private sealed record SolContextWindowAssignments(
         IReadOnlyList<long?> ContextWindows,
