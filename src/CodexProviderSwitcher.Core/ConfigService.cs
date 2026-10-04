@@ -15,12 +15,14 @@ public sealed partial class ConfigService
     public const long RecommendedOneMillionContextWindow = 1_000_000;
     public const long RecommendedOneMillionAutoCompactTokenLimit = 900_000;
     public const string OneMillionContextWindowManagedComment =
+        "# Managed by Codex Provider Switcher: Sol/Terra context preset.";
+    public const string LegacySolTerraContextWindowManagedComment =
         "# Managed by Codex Provider Switcher: GPT-5.6 Sol/Terra 1M context window.";
     public const string LegacySolContextWindowManagedComment =
         "# Managed by Codex Provider Switcher: GPT-5.6 Sol 1M context window.";
 
     // Retained as aliases so older callers and tests keep compiling while the
-    // preset now applies to both GPT-5.6 Sol and GPT-5.6 Terra.
+    // preset now applies to the supported Sol models and GPT-5.6 Terra.
     public const long RecommendedSolContextWindow = RecommendedOneMillionContextWindow;
     public const long RecommendedSolAutoCompactTokenLimit =
         RecommendedOneMillionAutoCompactTokenLimit;
@@ -481,8 +483,8 @@ public sealed partial class ConfigService
             {
                 throw new InvalidOperationException(
                     Localizer.Text(
-                        "1M 上下文仅支持 gpt-5.6-sol 或 gpt-5.6-terra。",
-                        "The 1M context window supports only gpt-5.6-sol or gpt-5.6-terra."));
+                        "上下文预设支持 GPT-6.1 Sol、GPT-6 Sol、GPT-5.6 Sol 和 Terra；实际上限由 Codex 模型目录和供应商决定。",
+                        "The context preset supports GPT-6.1 Sol, GPT-6 Sol, GPT-5.6 Sol and Terra; actual limits depend on the Codex catalog and provider."));
             }
 
             if (status.Mode == SolContextWindowMode.Recommended)
@@ -656,10 +658,8 @@ public sealed partial class ConfigService
     }
 
     public static bool IsSolModel(string? model) =>
-        string.Equals(
-            model?.Trim(),
-            AppPaths.DefaultOfficialModel,
-            StringComparison.OrdinalIgnoreCase);
+        new[] { AppPaths.DefaultOfficialModel, AppPaths.PreviousSolModel, AppPaths.LegacySolModel }
+            .Contains(model?.Trim(), StringComparer.OrdinalIgnoreCase);
 
     public static bool IsOneMillionContextModel(string? model) =>
         IsSolModel(model) ||
@@ -673,6 +673,9 @@ public sealed partial class ConfigService
         var trimmed = line.Trim();
         return trimmed.Equals(
                    OneMillionContextWindowManagedComment,
+                   StringComparison.Ordinal) ||
+               trimmed.Equals(
+                   LegacySolTerraContextWindowManagedComment,
                    StringComparison.Ordinal) ||
                trimmed.Equals(
                    LegacySolContextWindowManagedComment,

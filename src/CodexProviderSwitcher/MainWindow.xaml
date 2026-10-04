@@ -132,7 +132,7 @@
                                    VerticalAlignment="Center" />
                         <TextBlock x:Name="VersionText"
                                    Grid.Column="2"
-                                   Text="v1.4.6"
+                                   Text="v1.4.7"
                                    Foreground="{DynamicResource SubtleTextBrush}"
                                    FontSize="10"
                                    Margin="8,0,0,0"
@@ -1183,11 +1183,11 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Margin="0,0,20,0">
                                 <TextBlock x:Name="SolContextWindowTitleText"
-                                           Text="Sol / Terra 百万上下文"
+                                           Text="Sol / Terra 上下文预设"
                                            FontWeight="SemiBold"
                                            FontSize="13" />
                                 <TextBlock x:Name="SolContextWindowDescriptionText"
-                                           Text="支持 gpt-5.6-sol 和 gpt-5.6-terra。推荐使用 1,000,000 / 900,000；第三方实际上限仍由供应商决定。"
+                                           Text="支持 GPT-6.1 Sol、GPT-6 Sol、GPT-5.6 Sol 和 Terra。请求 1,000,000 / 900,000；实际窗口由 Codex 和供应商决定。"
                                            Style="{StaticResource PageLeadStyle}"
                                            Margin="0,2,0,0"
                                            TextWrapping="Wrap" />
@@ -1316,7 +1316,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Margin="0,0,20,0">
                                 <TextBlock x:Name="SettingsVersionText"
-                                           Text="Codex Provider Switcher v1.4.6"
+                                           Text="Codex Provider Switcher v1.4.7"
                                            FontWeight="SemiBold"
                                            FontSize="13" />
                                 <TextBlock x:Name="SettingsStorageDescriptionText"

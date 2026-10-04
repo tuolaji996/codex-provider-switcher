@@ -70,6 +70,7 @@ public partial class MainWindow : Window
     // updated only after a provider switch has completed successfully.
     private string? _selectedProviderProfileId;
     private bool _isNewProviderProfileDraft;
+    private string? _modelListBaseUrl;
 
     public MainWindow()
     {
@@ -172,6 +173,7 @@ public partial class MainWindow : Window
             }
 
             _ = CheckForUpdatesAsync(isManual: false);
+            await AutoRefreshModelsAsync();
         }
         catch (Exception exception)
         {
@@ -614,15 +616,15 @@ public partial class MainWindow : Window
                 ? T("未设置", "not set")
                 : _solContextWindowCurrentModel;
             SolContextWindowStatusText.Text = F(
-                "仅支持 gpt-5.6-sol / gpt-5.6-terra（当前：{0}）",
-                "GPT-5.6 Sol / Terra only (current: {0})",
+                "仅支持 Sol / Terra（当前：{0}）",
+                "Sol / Terra only (current: {0})",
                 currentModel);
             ToggleSolContextWindowButton.Content = T(
                 "仅限 Sol / Terra",
                 "Sol / Terra only");
             ToggleSolContextWindowButton.ToolTip = T(
-                "请先将当前模型切换为 gpt-5.6-sol 或 gpt-5.6-terra。",
-                "Switch the active model to gpt-5.6-sol or gpt-5.6-terra first.");
+                "请先切换为 GPT-6.1 Sol、GPT-6 Sol、GPT-5.6 Sol 或 Terra。",
+                "Switch to GPT-6.1 Sol, GPT-6 Sol, GPT-5.6 Sol or Terra first.");
             ToggleSolContextWindowButton.IsEnabled = false;
             return;
         }
@@ -638,8 +640,8 @@ public partial class MainWindow : Window
             case SolContextWindowMode.Recommended:
                 SolContextWindowStatusText.Text = _solContextWindowStatus.Managed
                     ? F(
-                        "已启用：1,000,000 / 900,000{0}",
-                        "Enabled: 1,000,000 / 900,000{0}",
+                        "已配置：1,000,000 / 900,000{0}",
+                        "Configured: 1,000,000 / 900,000{0}",
                         providerWarning)
                     : F(
                         "已检测到手动推荐值：1,000,000 / 900,000{0}",
@@ -765,8 +767,8 @@ public partial class MainWindow : Window
                     replaceCustom: replaceCustom);
                 OperationStatusText.Text = enable
                     ? T(
-                        "百万上下文已写入，正在启动 Codex…",
-                        "The 1M context window was written. Starting Codex...")
+                        "上下文预设已写入，正在启动 Codex…",
+                        "The context preset was written. Starting Codex...")
                     : T(
                         "默认上下文设置已恢复，正在启动 Codex…",
                         "The default context settings were restored. Starting Codex...");
@@ -796,10 +798,10 @@ public partial class MainWindow : Window
             RefreshBackups();
             OperationStatusText.Text = F(
                 enable
-                    ? "{1} 百万上下文已启用并重启 Codex；请新建任务使用完整窗口。备份：{0}"
+                    ? "{1} 上下文预设已写入并重启 Codex；请新建任务，实际窗口由 Codex 和供应商决定。备份：{0}"
                     : "{1} 上下文已恢复为 Codex 默认值并重启；请新建任务。备份：{0}",
                 enable
-                    ? "{1} 1M context is enabled and Codex was restarted; start a new task to use the full window. Backup: {0}"
+                    ? "{1} context preset was written and Codex restarted; start a new task. The actual window depends on Codex and the provider. Backup: {0}"
                     : "{1} context was restored to Codex defaults and restarted; start a new task. Backup: {0}",
                 backupFolder ?? T("无需写入", "No write needed"),
                 _solContextWindowCurrentModel ?? T("当前模型", "Current model"));
@@ -2732,13 +2734,14 @@ public partial class MainWindow : Window
         // A draft selection owns its own credential slot. Never mutate that
         // saved account into another model/route when the user edits the
         // fields; that used to make the K3 account disappear when switching
-        // back to SuiXiang OpenAI. A changed endpoint or model starts a new
-        // profile and therefore requires an explicitly entered key.
+        // back to SuiXiang OpenAI. A selected Sol account may upgrade to a
+        // newer Sol on the same endpoint while retaining its own credential.
         var profile = _isNewProviderProfileDraft
             ? null
             : DraftProviderProfile;
         var exactMatches = new List<ProviderProfile>();
         if (profile is not null &&
+            !ProviderAvailabilityPolicy.CanReuseSolAccount(profile, normalizedBaseUrl, model) &&
             (!ProfileMatchesBaseUrl(profile, normalizedBaseUrl) ||
              !string.Equals(profile.Model.Trim(), model.Trim(), StringComparison.Ordinal)))
         {
@@ -2971,7 +2974,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ProviderProfileComboBox_SelectionChanged(
+    private async void ProviderProfileComboBox_SelectionChanged(
         object sender,
         SelectionChangedEventArgs e)
     {
@@ -3004,6 +3007,10 @@ public partial class MainWindow : Window
                 "已载入 {0}。这只是待切换草稿；点击“切换到第三方”成功后才会成为当前线路。",
                 "Loaded {0}. This is only a switch draft; it becomes the active route after Switch to third-party succeeds.",
                 ResolveProfileRouteName(profile));
+            ModelComboBox.Items.Clear();
+            ModelComboBox.Text = profile.Model;
+            _modelListBaseUrl = null;
+            await AutoRefreshModelsAsync();
         }
         catch (Exception exception)
         {
@@ -3053,6 +3060,16 @@ public partial class MainWindow : Window
     {
         if (_isInitialized)
         {
+            if (_modelListBaseUrl is not null &&
+                !string.Equals(BaseUrlTextBox.Text.Trim().TrimEnd('/'),
+                    _modelListBaseUrl, StringComparison.Ordinal))
+            {
+                var currentModel = ModelComboBox.Text;
+                ModelComboBox.Items.Clear();
+                ModelComboBox.Text = currentModel;
+                _modelListBaseUrl = null;
+                ModelDiscoveryStatusText.Text = string.Empty;
+            }
             UpdatePersistedProviderCapabilityStatuses();
             UpdateKimiUi();
         }
@@ -3088,69 +3105,89 @@ public partial class MainWindow : Window
     private async void RefreshModelsButton_Click(
         object sender,
         RoutedEventArgs e)
+        => await RunBusyAsync(RefreshProviderModelsAsync);
+
+    private async Task AutoRefreshModelsAsync()
     {
+        if (_isBusy || DraftProviderProfile is not { } profile ||
+            ProviderAvailabilityPolicy.IsRetiredKimiProfile(profile) ||
+            !ProfileMatchesBaseUrl(profile, BaseUrlTextBox.Text) ||
+            !CredentialTargetFactory.IsValid(profile.CredentialTarget))
+        {
+            return;
+        }
+
         await RunBusyAsync(async () =>
         {
-            var normalizedBaseUrl = ConfigService.NormalizeBaseUrl(BaseUrlTextBox.Text);
-            var currentModel = ModelComboBox.Text.Trim();
-            var key = ResolveKeyForModelDiscovery(normalizedBaseUrl);
-            ModelDiscoveryStatusText.Text = T(
-                "正在读取服务提供的模型列表…",
-                "Reading the model list from the service...");
-            OperationStatusText.Text = ModelDiscoveryStatusText.Text;
-
-            var result = await _modelDiscoveryService.DiscoverAsync(
-                normalizedBaseUrl,
-                key,
-                CancellationToken.None);
-            if (!result.Success)
+            if (!string.IsNullOrWhiteSpace(CredentialVault.Read(profile.CredentialTarget)))
             {
-                ModelDiscoveryStatusText.Text = result.Summary;
-                OperationStatusText.Text = result.Summary;
-                return;
+                await RefreshProviderModelsAsync();
             }
-
-            var models = result.Models
-                .Where(model => !string.IsNullOrWhiteSpace(model))
-                .Select(model => model.Trim())
-                .Where(model =>
-                    !ProviderAvailabilityPolicy.IsRetiredKimiRoute(
-                        normalizedBaseUrl,
-                        model))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            var suiXiangDiscovery = SettingsStore.IsKimiBaseUrl(normalizedBaseUrl);
-            ModelComboBox.Items.Clear();
-            foreach (var model in models)
-            {
-                ModelComboBox.Items.Add(model);
-            }
-
-            // Keep the user's current text even when the provider did not
-            // advertise it. Compatibility is still confirmed by a live test.
-            ModelComboBox.Text = currentModel;
-            var currentIsListed = currentModel.Length > 0 &&
-                                   models.Any(model => string.Equals(
-                                       model,
-                                       currentModel,
-                                       StringComparison.OrdinalIgnoreCase));
-            ModelDiscoveryStatusText.Text = suiXiangDiscovery
-                ? F(
-                    "已发现 {0} 个可用的随想 OpenAI 模型。",
-                    "Discovered {0} available SuiXiang OpenAI models.",
-                    models.Count)
-                : currentIsListed || currentModel.Length == 0
-                ? F(
-                    "已发现 {0} 个模型；仍可手动输入自定义模型 ID。",
-                    "Discovered {0} models; you can still enter a custom model ID.",
-                    models.Count)
-                : F(
-                    "已发现 {0} 个模型；已保留当前模型“{1}”，它仍需通过实时兼容性测试。",
-                    "Discovered {0} models; kept the current model \"{1}\". It still needs a live compatibility test.",
-                    models.Count,
-                    currentModel);
-            OperationStatusText.Text = ModelDiscoveryStatusText.Text;
         });
+    }
+
+    private async Task RefreshProviderModelsAsync()
+    {
+        var normalizedBaseUrl = ConfigService.NormalizeBaseUrl(BaseUrlTextBox.Text);
+        var currentModel = ModelComboBox.Text.Trim();
+        var key = ResolveKeyForModelDiscovery(normalizedBaseUrl);
+        ModelDiscoveryStatusText.Text = T(
+            "正在读取服务提供的模型列表…",
+            "Reading the model list from the service...");
+        OperationStatusText.Text = ModelDiscoveryStatusText.Text;
+
+        var result = await _modelDiscoveryService.DiscoverAsync(
+            normalizedBaseUrl,
+            key,
+            CancellationToken.None);
+        if (!result.Success)
+        {
+            ModelDiscoveryStatusText.Text = result.Summary;
+            OperationStatusText.Text = result.Summary;
+            return;
+        }
+
+        var models = result.Models
+            .Where(model => !string.IsNullOrWhiteSpace(model))
+            .Select(model => model.Trim())
+            .Where(model =>
+                !ProviderAvailabilityPolicy.IsRetiredKimiRoute(
+                    normalizedBaseUrl,
+                    model))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var suiXiangDiscovery = SettingsStore.IsKimiBaseUrl(normalizedBaseUrl);
+        ModelComboBox.Items.Clear();
+        foreach (var model in models)
+        {
+            ModelComboBox.Items.Add(model);
+        }
+
+        // Keep the user's current text even when the provider did not
+        // advertise it. Compatibility is still confirmed by a live test.
+        ModelComboBox.Text = currentModel;
+        _modelListBaseUrl = normalizedBaseUrl;
+        var currentIsListed = currentModel.Length > 0 &&
+                               models.Any(model => string.Equals(
+                                   model,
+                                   currentModel,
+                                   StringComparison.OrdinalIgnoreCase));
+        ModelDiscoveryStatusText.Text = suiXiangDiscovery
+            ? F(
+                "已发现 {0} 个可用的随想 OpenAI 模型。",
+                "Discovered {0} available SuiXiang OpenAI models.",
+                models.Count)
+            : currentIsListed || currentModel.Length == 0
+            ? F(
+                "已发现 {0} 个模型；仍可手动输入自定义模型 ID。",
+                "Discovered {0} models; you can still enter a custom model ID.",
+                models.Count)
+            : F(
+                "已发现 {0} 个模型；已保留当前模型“{1}”，它仍需通过实时兼容性测试。",
+                "Discovered {0} models; kept the current model \"{1}\". It still needs a live compatibility test.",
+                models.Count,
+                currentModel);
+        OperationStatusText.Text = ModelDiscoveryStatusText.Text;
     }
 
     private string ResolveKeyForModelDiscovery(string normalizedBaseUrl)
@@ -3164,17 +3201,21 @@ public partial class MainWindow : Window
         var selected = DraftProviderProfile;
         var selectedMatchesRoute = !kimiRoute &&
                                    selected is not null &&
-                                   ProviderProfileRouteMatcher.FindExact(
+                                   (ProviderAvailabilityPolicy.CanReuseSolAccount(
+                                        selected, normalizedBaseUrl, model) ||
+                                    ProviderProfileRouteMatcher.FindExact(
                                        [selected],
                                        normalizedBaseUrl,
                                        model,
-                                       selected.Kind).Count == 1;
+                                       selected.Kind).Count == 1);
         var requiredKind = kimiRoute
             ? ProviderKinds.Kimi
             : selectedMatchesRoute
                 ? selected!.Kind
                 : null;
-        var routeMatches = ProviderProfileRouteMatcher.FindExact(
+        var routeMatches = selectedMatchesRoute
+            ? new List<ProviderProfile> { selected! }
+            : ProviderProfileRouteMatcher.FindExact(
             _settings.ProviderProfiles,
             normalizedBaseUrl,
             model,
@@ -3811,11 +3852,11 @@ public partial class MainWindow : Window
             "简体中文 Codex 会把 xhigh 和 Ultra 都显示为“极高”。Ultra 是菜单最底部带“更快消耗使用额度”的一项；Luna Agent 仍使用 Max。",
             "Simplified Chinese Codex labels both xhigh and Ultra as 'Extremely high'. Ultra is the bottom item with the faster usage warning; the Luna task agent remains on Max.");
         SolContextWindowTitleText.Text = T(
-            "Sol / Terra 百万上下文",
-            "Sol / Terra 1M context");
+            "Sol / Terra 上下文预设",
+            "Sol / Terra context preset");
         SolContextWindowDescriptionText.Text = T(
-            "支持 gpt-5.6-sol 和 gpt-5.6-terra。使用 1,000,000 上下文和 900,000 自动压缩；重启后请新建任务，第三方实际上限仍由供应商决定。",
-            "Supports gpt-5.6-sol and gpt-5.6-terra. Uses 1,000,000 context and 900,000 auto-compaction; start a new task after restart, and verify the provider supports the actual limit.");
+            "支持 GPT-6.1 Sol、GPT-6 Sol、GPT-5.6 Sol 和 Terra。请求 1,000,000 / 900,000；实际窗口可能被 Codex 模型目录缩小。重启后请新建任务。",
+            "Supports GPT-6.1 Sol, GPT-6 Sol, GPT-5.6 Sol and Terra. Requests 1,000,000 / 900,000; the Codex catalog may reduce the actual window. Start a new task after restart.");
         LunaWorkerTitleText.Text = T(
             "Luna 任务 Agent",
             "Luna task agent");
@@ -3878,7 +3919,7 @@ public partial class MainWindow : Window
 
     private static Version CurrentApplicationVersion() =>
         GitHubReleaseUpdateService.NormalizeVersion(
-            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 4, 6));
+            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 4, 7));
 
     private Brush ResourceBrush(string key) =>
         (Brush)FindResource(key);

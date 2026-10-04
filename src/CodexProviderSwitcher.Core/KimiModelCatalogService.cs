@@ -10,7 +10,7 @@ namespace CodexProviderSwitcher.Core;
 /// </summary>
 public sealed class KimiModelCatalogService
 {
-    public const string TemplateModelSlug = AppPaths.DefaultOfficialModel;
+    public const string TemplateModelSlug = AppPaths.LegacySolModel;
 
     public const int MaxCacheBytes = 64 * 1024 * 1024;
 

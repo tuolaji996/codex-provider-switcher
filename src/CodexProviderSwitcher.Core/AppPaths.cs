@@ -7,7 +7,7 @@ public static class AppPaths
     public const string LegacySuiXiangCredentialTarget = "CodexProviderSwitcher:sui-xiang";
     public const string CredentialTarget = LegacySuiXiangCredentialTarget;
     public const string DefaultBaseUrl = "https://sui-xiang.com/v1";
-    public const string DefaultThirdPartyModel = "codex-auto-review";
+    public const string DefaultThirdPartyModel = "gpt-6.1-sol";
     public const string DefaultThirdPartyImageModel = "gpt-image-2";
     // Kimi/K3 is routed through the configured SuiXiang-compatible upstream.
     // The local adapter still exposes Responses to Codex, but its upstream wire
@@ -27,7 +27,9 @@ public static class AppPaths
     public const string KimiLinuxRouterExecutableName = "CodexProviderKimiRouter";
     public const string KimiWslLauncherFileName = "codex-provider-kimi-launcher.sh";
     public const int KimiAuthRefreshIntervalMilliseconds = 30000;
-    public const string DefaultOfficialModel = "gpt-5.6-sol";
+    public const string DefaultOfficialModel = "gpt-6.1-sol";
+    public const string PreviousSolModel = "gpt-6-sol";
+    public const string LegacySolModel = "gpt-5.6-sol";
     public const string TerraModel = "gpt-5.6-terra";
     public const string CodexAppId = "OpenAI.Codex_2p2nqsd0c76g0!App";
 

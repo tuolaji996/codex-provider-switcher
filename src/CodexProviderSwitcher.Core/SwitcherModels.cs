@@ -115,6 +115,27 @@ public static class ProviderAvailabilityPolicy
         (string.Equals(profile.Kind, ProviderKinds.Kimi, StringComparison.Ordinal) ||
          IsRetiredKimiRoute(profile.BaseUrl, profile.Model));
 
+    // A selected saved Sol account can upgrade models on its existing endpoint.
+    // Keep the credential bound to that exact account and normalized URL.
+    public static bool CanReuseSolAccount(ProviderProfile? profile, string baseUrl, string model)
+    {
+        if (profile is null || IsRetiredKimiProfile(profile) ||
+            !ConfigService.IsSolModel(profile.Model) || !ConfigService.IsSolModel(model))
+        {
+            return false;
+        }
+
+        try
+        {
+            return string.Equals(ConfigService.NormalizeBaseUrl(profile.BaseUrl),
+                ConfigService.NormalizeBaseUrl(baseUrl), StringComparison.Ordinal);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
     public static void RequireAvailableThirdPartyRoute(string? baseUrl, string? model)
     {
         if (IsRetiredKimiRoute(baseUrl, model))

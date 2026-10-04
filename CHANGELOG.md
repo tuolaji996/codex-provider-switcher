@@ -4,6 +4,25 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.4.7] - 2026-10-04
+
+### Added
+
+- New setups default to GPT-6.1 Sol, while existing saved models and accounts
+  remain unchanged. The Sol context and Ultra controls also recognize GPT-6 Sol
+  and GPT-6.1 Sol without dropping legacy GPT-5.6 Sol support.
+- Saved provider accounts automatically load their current model list on app
+  startup and account selection; manually entered model IDs remain supported.
+
+### Fixed
+
+- A selected saved Sol account can change Sol versions on the same endpoint
+  without re-entering its API key. Different endpoints and accounts do not
+  inherit that credential.
+- Context UI and documentation now distinguish the requested 1M/900K preset
+  from actual Codex catalog/provider limits. Older managed context markers
+  remain recognized, and user-owned overrides are preserved.
+
 ## [1.4.6] - 2026-09-12
 
 ### Added

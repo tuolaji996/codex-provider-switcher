@@ -163,12 +163,41 @@ Check(
 var suiXiangDiscovery = await new ModelDiscoveryService(
     new HttpClient(new ModelDiscoveryStubHttpMessageHandler(
         HttpStatusCode.OK,
-        "{\"data\":[{\"id\":\"k3\"},{\"id\":\"gpt-5.6-sol\"}]}")))
+        "{\"data\":[{\"id\":\"k3\"},{\"id\":\"gpt-5.6-sol\"},{\"id\":\"gpt-6.1-sol\"}]}")))
     .DiscoverAsync(AppPaths.KimiUpstreamBaseUrl, modelDiscoveryKey);
 Check(
     suiXiangDiscovery.Success &&
-    suiXiangDiscovery.Models.SequenceEqual(new[] { "gpt-5.6-sol" }),
-    "SuiXiang model discovery exposed the retired K3 route.");
+    suiXiangDiscovery.Models.SequenceEqual(new[] { "gpt-5.6-sol", "gpt-6.1-sol" }),
+    "SuiXiang model discovery dropped GPT-6.1 Sol or exposed the retired K3 route.");
+
+var selectedSolAccount = new ProviderProfile
+{
+    Id = "selected-sol-account",
+    Kind = ProviderKinds.SuiXiang,
+    BaseUrl = "https://sui-xiang.com/v1/",
+    Model = "gpt-5.6-sol",
+    CredentialTarget = "selected-account-credential"
+};
+Check(
+    ProviderAvailabilityPolicy.CanReuseSolAccount(
+        selectedSolAccount, "https://sui-xiang.com/v1", "gpt-6.1-sol") &&
+    ProviderAvailabilityPolicy.CanReuseSolAccount(
+        selectedSolAccount, "https://sui-xiang.com/v1", " GPT-6-SOL "),
+    "Upgrading the selected Sol account required replacing its saved credential.");
+Check(
+    !ProviderAvailabilityPolicy.CanReuseSolAccount(
+        selectedSolAccount, "https://other.example/v1", "gpt-6.1-sol") &&
+    !ProviderAvailabilityPolicy.CanReuseSolAccount(
+        selectedSolAccount, "https://sui-xiang.com/V1", "gpt-6.1-sol") &&
+    !ProviderAvailabilityPolicy.CanReuseSolAccount(
+        selectedSolAccount, "https://sui-xiang.com/v1", "gpt-5.6-luna") &&
+    !ProviderAvailabilityPolicy.CanReuseSolAccount(
+        null, "https://sui-xiang.com/v1", "gpt-6.1-sol"),
+    "Sol credential reuse crossed an endpoint or model-family boundary.");
+Check(
+    new SwitcherSettings().OfficialModel == "gpt-6.1-sol" &&
+    new SwitcherSettings().ThirdPartyModel == "gpt-6.1-sol",
+    "New settings did not default to GPT-6.1 Sol.");
 
 Localizer.Use(AppLanguage.English);
 var englishModelDiscovery = await new ModelDiscoveryService(
@@ -1125,6 +1154,34 @@ Check(
     !ConfigService.IsOneMillionContextModel("gpt-5.6-luna"),
     "The 1M context option did not recognize both Sol and Terra exclusively.");
 
+foreach (var solModel in new[] { "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol" })
+{
+    var solConfig = solContextBase.Replace("gpt-5.6-sol", solModel, StringComparison.Ordinal);
+    var enabledConfig = service.BuildSolContextWindowConfig(solConfig, enabled: true);
+    var upgradedOfficialConfig = service.BuildOfficialConfig(managedSolContext, solModel, null);
+    Check(
+        ConfigService.IsSolModel(solModel.ToUpperInvariant()) &&
+        ConfigService.IsOneMillionContextModel(solModel) &&
+        service.ParseSolContextWindowStatus(enabledConfig) is
+        { Mode: SolContextWindowMode.Recommended, Managed: true } &&
+        service.ParseSolContextWindowStatus(upgradedOfficialConfig) is
+        { Mode: SolContextWindowMode.Recommended, Managed: true } &&
+        service.ParseStatus(upgradedOfficialConfig).Model == solModel,
+        $"The Sol context preset or official configuration did not support {solModel}.");
+}
+
+var legacySolTerraContext = managedSolContext.Replace(
+    ConfigService.OneMillionContextWindowManagedComment,
+    ConfigService.LegacySolTerraContextWindowManagedComment,
+    StringComparison.Ordinal);
+Check(
+    service.ParseSolContextWindowStatus(legacySolTerraContext) is
+    { Mode: SolContextWindowMode.Recommended, Managed: true } &&
+    service.ParseSolContextWindowStatus(service.BuildSolContextWindowConfig(
+        legacySolTerraContext, enabled: false)) is
+    { Mode: SolContextWindowMode.Default, Managed: false },
+    "The previous Sol/Terra marker was not recognized or cleanly removed.");
+
 var unsupportedModelEnableRejected = false;
 try
 {
@@ -1376,6 +1433,20 @@ var customProviderSolContext = service.BuildThirdPartyConfig(
     profileCredentialTarget);
 var expectedNativeBrokerCommand =
     "command = \"C:\\\\Users\\\\Test\\\\AppData\\\\Local\\\\Programs\\\\CodexProviderSwitcher\\\\CodexProviderToken.exe\"";
+var sol61ThirdPartyConfig = service.BuildThirdPartyConfig(
+    managedSolContext,
+    "gpt-6.1-sol",
+    AppPaths.DefaultBaseUrl,
+    @"C:\Users\Test\AppData\Local\Programs\CodexProviderSwitcher\CodexProviderToken.exe",
+    profileCredentialTarget);
+Check(
+    service.ParseStatus(sol61ThirdPartyConfig) is
+    { Mode: ProviderMode.ThirdParty, ProviderId: "OpenAI", Model: "gpt-6.1-sol", ReviewModel: "gpt-6.1-sol" } &&
+    service.ParseStatus(sol61ThirdPartyConfig).CredentialTarget == profileCredentialTarget &&
+    service.ParseSolContextWindowStatus(sol61ThirdPartyConfig) is
+    { Mode: SolContextWindowMode.Recommended, Managed: true } &&
+    sol61ThirdPartyConfig.Contains(expectedNativeBrokerCommand, StringComparison.Ordinal),
+    "GPT-6.1 Sol did not preserve stable history routing, native credential auth, or the context preset.");
 Check(
     service.ParseSolContextWindowStatus(customProviderSolContext) is
     { Mode: SolContextWindowMode.Recommended, Managed: true },
