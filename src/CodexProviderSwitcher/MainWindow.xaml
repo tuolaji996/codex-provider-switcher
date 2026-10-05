@@ -132,7 +132,7 @@
                                    VerticalAlignment="Center" />
                         <TextBlock x:Name="VersionText"
                                    Grid.Column="2"
-                                   Text="v1.4.7"
+                                   Text="v1.4.8"
                                    Foreground="{DynamicResource SubtleTextBrush}"
                                    FontSize="10"
                                    Margin="8,0,0,0"
@@ -1143,11 +1143,11 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Margin="0,0,20,0">
                                 <TextBlock x:Name="SolUltraTitleText"
-                                           Text="Sol Ultra"
+                                           Text="Sol Max / Ultra"
                                            FontWeight="SemiBold"
                                            FontSize="13" />
                                 <TextBlock x:Name="SolUltraDescriptionText"
-                                           Text="简体中文 Codex 会把 xhigh 和 Ultra 都显示为“极高”。Ultra 是最底部带“更快消耗使用额度”的一项。"
+                                           Text="开放 Max / Ultra 最高档菜单；可用档位以模型和客户端支持为准，不改变当前推理档位。"
                                            Style="{StaticResource PageLeadStyle}"
                                            Margin="0,2,0,0"
                                            TextWrapping="Wrap" />
@@ -1316,7 +1316,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Margin="0,0,20,0">
                                 <TextBlock x:Name="SettingsVersionText"
-                                           Text="Codex Provider Switcher v1.4.7"
+                                           Text="Codex Provider Switcher v1.4.8"
                                            FontWeight="SemiBold"
                                            FontSize="13" />
                                 <TextBlock x:Name="SettingsStorageDescriptionText"

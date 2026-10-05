@@ -21,6 +21,8 @@ public static class AppPaths
     public const string KimiModelCatalogFileName =
         "codex-provider-switcher-kimi-model-catalog.json";
     public const string KimiModelCatalogRelativePath = KimiModelCatalogFileName;
+    public const string SolModelCatalogFileName =
+        "codex-provider-switcher-sol-model-catalog.json";
     public const string KimiRouterExecutableName = "CodexProviderKimiRouter.exe";
     public const string KimiRouterExeName = KimiRouterExecutableName;
     public const string KimiLinuxRouterDirectoryName = "linux-x64";

@@ -20,6 +20,8 @@ public sealed partial class ConfigService
         "# Managed by Codex Provider Switcher: GPT-5.6 Sol/Terra 1M context window.";
     public const string LegacySolContextWindowManagedComment =
         "# Managed by Codex Provider Switcher: GPT-5.6 Sol 1M context window.";
+    public const string DisabledContextPresetComment =
+        "# Managed by Codex Provider Switcher: context preset explicitly disabled.";
 
     // Retained as aliases so older callers and tests keep compiling while the
     // preset now applies to the supported Sol models and GPT-5.6 Terra.
@@ -175,6 +177,83 @@ public sealed partial class ConfigService
         }
     }
 
+    public bool ParseSolAdvancedReasoningVisibility(string text)
+    {
+        var desktop = ReadSection(text, "desktop");
+        return desktop is not null &&
+               ReadStringArrayContains(desktop, EnabledReasoningEffortsKey, "max") &&
+               ReadStringArrayContains(desktop, EnabledReasoningEffortsKey, "ultra");
+    }
+
+    public string BuildSolAdvancedReasoningConfig(string original)
+    {
+        var desktop = ReadSection(original, "desktop");
+        var arrayPattern = new Regex(
+            @"(?m)^[ \t]*" + Regex.Escape(EnabledReasoningEffortsKey) +
+            @"[ \t]*=[ \t]*\[(?<items>[^\]]*)\]");
+        var match = desktop is null ? Match.Empty : arrayPattern.Match(desktop);
+        var efforts = match.Success
+            ? Regex.Matches(match.Groups["items"].Value, "\"((?:\\\\.|[^\"])*)\"|'([^']*)'")
+                .Select(item => item.Groups[1].Success
+                    ? Regex.Unescape(item.Groups[1].Value) : item.Groups[2].Value).ToList()
+            : new List<string> { "low", "medium", "high", "xhigh", "ultra", "persistent" };
+        foreach (var effort in new[] { "max", "ultra" })
+        {
+            if (!efforts.Contains(effort, StringComparer.OrdinalIgnoreCase))
+            {
+                efforts.Add(effort);
+            }
+        }
+
+        var assignment = EnabledReasoningEffortsKey + " = [" +
+                         string.Join(", ", efforts.Select(effort => $"\"{EscapeToml(effort)}\"")) + "]";
+        var updated = UpsertSectionAssignment(original, "desktop", EnabledReasoningEffortsKey,
+            assignment[(assignment.IndexOf('=') + 1)..].Trim());
+        // Menu permissions do not invent model capabilities or select an effort.
+        return BuildSolUltraVisibilityConfig(updated, enabled: true);
+    }
+
+    public string? RequestSolAdvancedReasoningEnablement(string? configPath = null)
+    {
+        configPath ??= AppPaths.ConfigPath;
+        var original = File.ReadAllText(configPath);
+        var updated = BuildSolAdvancedReasoningConfig(original);
+        if (updated == original)
+        {
+            return null;
+        }
+        var backup = CreateBackup(configPath);
+        try
+        {
+            WriteConfig(updated, configPath);
+            var readBack = File.ReadAllText(configPath);
+            if (readBack != updated || !ParseSolAdvancedReasoningVisibility(readBack))
+            {
+                throw new InvalidOperationException("Max/Ultra visibility verification failed.");
+            }
+            return backup;
+        }
+        catch
+        {
+            WriteConfig(original, configPath);
+            throw;
+        }
+    }
+
+    public string BuildSolModelCatalogConfig(string original, bool enabled)
+    {
+        var lines = original.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n').ToList();
+        if (enabled)
+        {
+            EnsureManagedModelCatalogAssignment(lines, AppPaths.SolModelCatalogFileName);
+        }
+        else
+        {
+            RemoveManagedModelCatalogAssignments(lines);
+        }
+        return string.Join(original.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n", lines);
+    }
+
     public string? RequestSolUltraEnablement(string? configPath = null)
     {
         configPath ??= AppPaths.ConfigPath;
@@ -268,7 +347,8 @@ public sealed partial class ConfigService
             original,
             enabled,
             replaceCustom);
-        if (string.Equals(updated, original, StringComparison.Ordinal))
+        if (string.Equals(updated, original, StringComparison.Ordinal) &&
+            !SolModelCatalogService.RequiresCatalog(this, updated))
         {
             return null;
         }
@@ -277,22 +357,23 @@ public sealed partial class ConfigService
         var wroteConfig = false;
         try
         {
-            WriteConfig(updated, path);
-            wroteConfig = true;
-            var readBack = File.ReadAllText(path);
-            var verifiedStatus = ParseSolContextWindowStatus(readBack);
-            var verified = string.Equals(readBack, updated, StringComparison.Ordinal) &&
-                           (enabled
-                               ? verifiedStatus.IsRecommended && verifiedStatus.Managed
-                               : verifiedStatus.Mode == SolContextWindowMode.Default &&
-                                 !verifiedStatus.Managed);
-            if (!verified)
-            {
-                throw new InvalidOperationException(
-                    "Post-write verification failed for the 1M context window settings.");
-            }
-
-            return backupFolder;
+            return SolModelCatalogService.WithPreparedCatalog(
+                this, updated, path, backupFolder, prepared =>
+                {
+                    WriteConfig(prepared, path);
+                    wroteConfig = true;
+                    var readBack = File.ReadAllText(path);
+                    var verifiedStatus = ParseSolContextWindowStatus(readBack);
+                    var verified = readBack == prepared && (enabled
+                        ? verifiedStatus.IsRecommended && (verifiedStatus.Managed ||
+                            ParseSolContextWindowStatus(original).IsRecommended)
+                        : verifiedStatus.Mode == SolContextWindowMode.Default && !verifiedStatus.Managed);
+                    if (!verified)
+                    {
+                        throw new InvalidOperationException("Context configuration read-back failed.");
+                    }
+                    return backupFolder;
+                });
         }
         catch (Exception exception) when (wroteConfig)
         {
@@ -553,6 +634,11 @@ public sealed partial class ConfigService
                     $"{ModelAutoCompactTokenLimitKey} = {RecommendedOneMillionAutoCompactTokenLimit}"
                 });
         }
+        else
+        {
+            lines.Insert(0, DisabledContextPresetComment);
+            RemoveManagedModelCatalogAssignments(lines);
+        }
 
         return string.Join(newline, lines);
     }
@@ -566,7 +652,8 @@ public sealed partial class ConfigService
                 break;
             }
 
-            if (IsManagedOneMillionContextComment(lines[index]) ||
+            if (lines[index].Trim() == DisabledContextPresetComment ||
+                IsManagedOneMillionContextComment(lines[index]) ||
                 IsAssignment(lines[index], ModelContextWindowKey) ||
                 IsAssignment(lines[index], ModelAutoCompactTokenLimitKey))
             {
@@ -731,7 +818,19 @@ public sealed partial class ConfigService
         lines.Add(string.Empty);
         lines.AddRange(managedBlock.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'));
         lines.Add(string.Empty);
-        return string.Join(newline, lines);
+        var updated = string.Join(newline, lines);
+        if (string.Equals(model.Trim(), AppPaths.DefaultOfficialModel, StringComparison.OrdinalIgnoreCase))
+        {
+            var context = new ConfigService().ParseSolContextWindowStatus(updated);
+            var explicitlyDisabled = lines.TakeWhile(line => ParseSectionName(line) is null)
+                .Any(line => line.Trim() == DisabledContextPresetComment);
+            if (context.Mode == SolContextWindowMode.Default && !explicitlyDisabled)
+            {
+                updated = RewriteSolContextWindowAssignments(updated, enabled: true);
+            }
+            updated = new ConfigService().BuildSolAdvancedReasoningConfig(updated);
+        }
+        return updated;
     }
 
     private static void RemoveManagedProviderSections(List<string> lines)
@@ -804,10 +903,8 @@ public sealed partial class ConfigService
             }
 
             if (IsAssignment(lines[index], ModelCatalogJsonKey) &&
-                string.Equals(
-                    ReadStringFromAssignment(lines[index]),
-                    AppPaths.KimiModelCatalogFileName,
-                    StringComparison.Ordinal))
+                ReadStringFromAssignment(lines[index]) is
+                    AppPaths.KimiModelCatalogFileName or AppPaths.SolModelCatalogFileName)
             {
                 lines.RemoveAt(index);
                 continue;
@@ -824,10 +921,10 @@ public sealed partial class ConfigService
         if (!string.Equals(
                 expectedValue,
                 AppPaths.KimiModelCatalogFileName,
-                StringComparison.Ordinal))
+                StringComparison.Ordinal) && expectedValue != AppPaths.SolModelCatalogFileName)
         {
             throw new ArgumentException(
-                "The Kimi model catalog path is not managed by this application.",
+                "The model catalog path is not managed by this application.",
                 nameof(expectedValue));
         }
 
@@ -843,10 +940,8 @@ public sealed partial class ConfigService
                 continue;
             }
 
-            if (!string.Equals(
-                    ReadStringFromAssignment(lines[index]),
-                    expectedValue,
-                    StringComparison.Ordinal))
+            if (ReadStringFromAssignment(lines[index]) is not
+                (AppPaths.KimiModelCatalogFileName or AppPaths.SolModelCatalogFileName))
             {
                 throw new InvalidOperationException(
                     Localizer.Text(
@@ -883,6 +978,24 @@ public sealed partial class ConfigService
             {
                 if (IsAssignment(lines[sectionEnd], key))
                 {
+                    // Replace an entire multiline array rather than leaving stale
+                    // trailing values behind. Other assignments retain their lines.
+                    var currentValue = lines[sectionEnd][(lines[sectionEnd].IndexOf('=') + 1)..].TrimStart();
+                    if (tomlValue.StartsWith('[') && currentValue.StartsWith('[') &&
+                        !currentValue.Contains(']'))
+                    {
+                        var arrayEnd = sectionEnd + 1;
+                        while (arrayEnd < lines.Count && ParseSectionName(lines[arrayEnd]) is null &&
+                               !lines[arrayEnd].Contains(']'))
+                        {
+                            arrayEnd++;
+                        }
+                        if (arrayEnd >= lines.Count || ParseSectionName(lines[arrayEnd]) is not null)
+                        {
+                            throw new InvalidDataException("A desktop setting contains an unfinished array.");
+                        }
+                        lines.RemoveRange(sectionEnd + 1, arrayEnd - sectionEnd);
+                    }
                     lines[sectionEnd] = $"{key} = {tomlValue}";
                     return string.Join(newline, lines);
                 }

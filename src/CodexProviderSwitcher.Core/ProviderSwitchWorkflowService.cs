@@ -185,17 +185,19 @@ public sealed class ProviderSwitchWorkflowService
         try
         {
             var updated = buildConfig(original);
-            _configService.WriteConfig(updated, configPath);
-            wroteConfig = true;
-
-            var verification = _configService.ReadStatus(configPath);
-            if (!isExpectedStatus(verification))
-            {
-                throw new InvalidOperationException(
-                    $"Post-write verification failed. Backup: {backupFolder}");
-            }
-
-            return new ProviderSwitchResult(backupFolder, verification);
+            return SolModelCatalogService.WithPreparedCatalog(
+                _configService, updated, configPath, backupFolder, prepared =>
+                {
+                    _configService.WriteConfig(prepared, configPath);
+                    wroteConfig = true;
+                    var verification = _configService.ReadStatus(configPath);
+                    if (File.ReadAllText(configPath) != prepared || !isExpectedStatus(verification))
+                    {
+                        throw new InvalidOperationException(
+                            $"Post-write verification failed. Backup: {backupFolder}");
+                    }
+                    return new ProviderSwitchResult(backupFolder, verification);
+                });
         }
         catch (Exception exception) when (wroteConfig)
         {

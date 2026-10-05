@@ -1460,6 +1460,140 @@ var thirdParty = service.BuildThirdPartyConfig(
     "https://sui-xiang.com/v1/",
     @"C:\Users\Test\AppData\Local\Programs\CodexProviderSwitcher\CodexProviderToken.exe",
     profileCredentialTarget);
+
+var advancedMenu = service.BuildSolAdvancedReasoningConfig(noDesktopConfig);
+Check(
+    service.ParseSolAdvancedReasoningVisibility(advancedMenu) &&
+    service.BuildSolAdvancedReasoningConfig(advancedMenu) == advancedMenu &&
+    !advancedMenu.Contains("model_reasoning_effort", StringComparison.Ordinal),
+    "Max/Ultra menu enablement was not idempotent or forced an API reasoning effort.");
+var restrictedMenu = "model = \"gpt-6.1-sol\"\nmodel_reasoning_effort = \"high\"\n" +
+    "[desktop]\nenabled-reasoning-efforts = [\n  \"low\", \"xhigh\", \"persistent\"\n]\n" +
+    "show-ultra-in-model-picker-slider = false\nother_setting = true\n";
+var repairedMenu = service.BuildSolAdvancedReasoningConfig(restrictedMenu);
+Check(
+    service.ParseSolAdvancedReasoningVisibility(repairedMenu) &&
+    repairedMenu.Contains("\"persistent\"", StringComparison.Ordinal) &&
+    repairedMenu.Contains("other_setting = true", StringComparison.Ordinal) &&
+    repairedMenu.Contains("model_reasoning_effort = \"high\"", StringComparison.Ordinal),
+    "Restricted or multiline desktop settings were not repaired without changing the selected effort.");
+Check(service.ParseSolAdvancedReasoningVisibility(repairedMenu.Replace(
+        "show-ultra-in-model-picker-slider = true", "show-ultra-in-model-picker-slider = false")),
+    "Consuming the one-shot slider flag incorrectly hid configured Max menu permissions.");
+var literalMenu = restrictedMenu.Replace("\"low\", \"xhigh\", \"persistent\"", "'low', 'xhigh', 'persistent'");
+Check(service.BuildSolAdvancedReasoningConfig(literalMenu).Contains("\"persistent\"", StringComparison.Ordinal),
+    "Literal TOML array strings were dropped from desktop reasoning permissions.");
+
+const string sol61CacheFixture = """
+    {"models":[
+      {"slug":"gpt-6.1-sol","display_name":"GPT-6.1 Sol",
+       "context_window":272000,"max_context_window":272000,
+       "effective_context_window_percent":95,
+       "supported_reasoning_levels":[{"effort":"high"},{"effort":"max"}],
+       "model_messages":{"instructions_template":"exact native 6.1 instructions"},
+       "use_responses_lite":true,"apply_patch_tool_type":"freeform"},
+      {"slug":"gpt-6-luna","max_context_window":272000,
+       "supported_reasoning_levels":[{"effort":"max"}]}]}
+    """;
+using (var longCatalog = JsonDocument.Parse(SolModelCatalogService.BuildCatalog(sol61CacheFixture)))
+{
+    var longModels = longCatalog.RootElement.GetProperty("models");
+    var longSol = longModels[0];
+    Check(
+        longSol.GetProperty("max_context_window").GetInt64() == 922000 &&
+        longSol.GetProperty("context_window").GetInt64() == 272000 &&
+        longSol.GetProperty("effective_context_window_percent").GetInt32() == 95 &&
+        longSol.GetProperty("model_messages").GetProperty("instructions_template").GetString() ==
+            "exact native 6.1 instructions" &&
+        longSol.GetProperty("supported_reasoning_levels").GetArrayLength() == 2 &&
+        longSol.GetProperty("use_responses_lite").GetBoolean() &&
+        longModels[1].GetProperty("max_context_window").GetInt64() == 272000,
+        "The 6.1 long-context catalog changed instructions, reasoning, tools, defaults, or other models.");
+}
+foreach (var invalidCatalog in new[] { "not-json", "{\"models\":[]}", "{\"models\":[{\"slug\":\"gpt-5.6-sol\"}]}" })
+{
+    var rejected = false;
+    try { _ = SolModelCatalogService.BuildCatalog(invalidCatalog); }
+    catch (InvalidDataException) { rejected = true; }
+    Check(rejected, "A missing exact 6.1 model entry was replaced with invented model metadata.");
+}
+
+var longContextRoot = Path.Combine(Path.GetTempPath(), $"codex-sol61-context-{Guid.NewGuid():N}");
+var longContextPath = Path.Combine(longContextRoot, "config.toml");
+var longCatalogPath = Path.Combine(longContextRoot, AppPaths.SolModelCatalogFileName);
+var longBackups = new List<string>();
+Directory.CreateDirectory(longContextRoot);
+File.WriteAllText(Path.Combine(longContextRoot, "models_cache.json"), sol61CacheFixture);
+File.WriteAllText(longContextPath, original);
+try
+{
+    var workflow = new ProviderSwitchWorkflowService(service);
+    var switched61 = workflow.SwitchToThirdParty(new ThirdPartySwitchRequest(
+        "gpt-6.1-sol", AppPaths.DefaultBaseUrl,
+        @"C:\Users\Test\CodexProviderToken.exe", profileCredentialTarget), longContextPath);
+    longBackups.Add(switched61.BackupFolder);
+    var switched61Text = File.ReadAllText(longContextPath);
+    Check(
+        switched61.VerifiedStatus.ModelCatalogJson == AppPaths.SolModelCatalogFileName &&
+        switched61.VerifiedStatus.ProviderId == "OpenAI" &&
+        switched61.VerifiedStatus.CredentialTarget == profileCredentialTarget &&
+        service.ParseSolContextWindowStatus(switched61Text).IsRecommended &&
+        service.ParseSolAdvancedReasoningVisibility(switched61Text) && File.Exists(longCatalogPath) &&
+        File.ReadAllText(Path.Combine(longContextRoot, "models_cache.json")) == sol61CacheFixture,
+        "Switching to 6.1 did not enable the preset/menu and managed catalog without touching the native cache.");
+
+    var catalogBeforeFailure = File.ReadAllBytes(longCatalogPath);
+    var rollbackObserved = false;
+    try
+    {
+        _ = SolModelCatalogService.WithPreparedCatalog<string>(service, switched61Text,
+            longContextPath, longContextRoot, _ => throw new IOException("Injected config failure."));
+    }
+    catch (IOException) { rollbackObserved = true; }
+    Check(rollbackObserved && File.ReadAllBytes(longCatalogPath).SequenceEqual(catalogBeforeFailure),
+        "A config failure did not restore the previous model catalog.");
+    File.Delete(longCatalogPath);
+    try
+    {
+        _ = SolModelCatalogService.WithPreparedCatalog<string>(service, switched61Text,
+            longContextPath, longContextRoot, _ => throw new IOException("Injected new-file failure."));
+    }
+    catch (IOException) { }
+    Check(!File.Exists(longCatalogPath), "A failed transaction left a newly created catalog behind.");
+
+    var disabledBackup = service.SetSolContextWindow(false, longContextPath);
+    if (disabledBackup is not null) { longBackups.Add(disabledBackup); }
+    var optedOut61 = workflow.SwitchToOfficial(new OfficialSwitchRequest("gpt-6.1-sol", null), longContextPath);
+    longBackups.Add(optedOut61.BackupFolder);
+    Check(
+        service.ReadSolContextWindowStatus(longContextPath).Mode == SolContextWindowMode.Default &&
+        optedOut61.VerifiedStatus.ModelCatalogJson is null,
+        "Switching to 6.1 ignored an explicit context opt-out.");
+    var enabledBackup = service.SetSolContextWindow(true, longContextPath);
+    if (enabledBackup is not null) { longBackups.Add(enabledBackup); }
+    Check(service.ReadStatus(longContextPath).ModelCatalogJson == AppPaths.SolModelCatalogFileName &&
+        service.ReadSolContextWindowStatus(longContextPath).IsRecommended,
+        "Explicit context enablement did not also prepare the 6.1 long-context catalog.");
+    var switchedLuna = workflow.SwitchToOfficial(new OfficialSwitchRequest("gpt-6-luna", null), longContextPath);
+    longBackups.Add(switchedLuna.BackupFolder);
+    Check(switchedLuna.VerifiedStatus.ModelCatalogJson is null &&
+        service.ReadSolContextWindowStatus(longContextPath).Mode == SolContextWindowMode.Default,
+        "Switching to another model retained the managed 6.1 catalog or context settings.");
+
+    var userContext = "model = \"gpt-6.1-sol\"\nmodel_context_window = 800000\n" +
+        "model_auto_compact_token_limit = 700000\nmodel_catalog_json = \"user-owned.json\"\n";
+    File.WriteAllText(longContextPath, userContext);
+    var userPreserved = workflow.SwitchToOfficial(new OfficialSwitchRequest("gpt-6.1-sol", null), longContextPath);
+    longBackups.Add(userPreserved.BackupFolder);
+    Check(userPreserved.VerifiedStatus.ModelCatalogJson == "user-owned.json" &&
+        service.ReadSolContextWindowStatus(longContextPath).ContextWindow == 800000,
+        "The automatic preset overwrote a user-owned context or catalog.");
+}
+finally
+{
+    Directory.Delete(longContextRoot, true);
+    foreach (var longBackup in longBackups.Distinct()) { Directory.Delete(longBackup, true); }
+}
 var thirdPartyStatus = service.ParseStatus(thirdParty);
 Check(thirdPartyStatus.Mode == ProviderMode.ThirdParty, "Third-party mode was not detected.");
 Check(thirdPartyStatus.ProviderId == "OpenAI", "Stable provider ID changed.");

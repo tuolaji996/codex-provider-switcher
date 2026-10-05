@@ -4,6 +4,21 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.4.8] - 2026-10-05
+
+### Fixed
+
+- GPT-6.1 Sol provider switches automatically configure the 1M/900K preset
+  when no custom context settings or explicit opt-out exist.
+- An independent managed catalog fixes stale 272K GPT-6.1 Sol input metadata
+  using the documented 922K maximum input, without modifying the native cache,
+  instruction/tool metadata, reasoning capabilities, or other models.
+- Enable Max and Ultra desktop menu permissions instead of only requesting
+  the Ultra slider flag. Existing reasoning settings remain unchanged. The
+  status reports configured visibility, not guaranteed model capability.
+- Preserve explicit context opt-outs, custom contexts and catalogs, and
+  multiline desktop settings. Config/catalog failures roll back safely.
+
 ## [1.4.7] - 2026-10-04
 
 ### Added

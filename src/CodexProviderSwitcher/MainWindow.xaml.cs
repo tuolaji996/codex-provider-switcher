@@ -512,25 +512,26 @@ public partial class MainWindow : Window
 
     private void RefreshSolUltraSetting()
     {
-        _solUltraAvailable = _configService.ReadSolUltraAvailability();
+        _solUltraAvailable = File.Exists(AppPaths.ConfigPath) &&
+            _configService.ParseSolAdvancedReasoningVisibility(File.ReadAllText(AppPaths.ConfigPath));
         UpdateSolUltraStatus();
     }
 
     private void UpdateSolUltraStatus()
     {
         SolUltraStatusText.Text = _solUltraAvailable
-            ? T("Ultra 已可用", "Ultra available")
+            ? T("最高档菜单已启用", "Advanced menu enabled")
             : T("尚未启用", "Not enabled yet");
         EnableSolUltraButton.Content = _solUltraAvailable
-            ? T("Ultra 已可用", "Ultra available")
+            ? T("最高档权限已配置", "Advanced permissions configured")
             : T("启用并重启 Codex", "Enable and restart Codex");
         EnableSolUltraButton.ToolTip = _solUltraAvailable
             ? T(
-                "简体中文 Codex 中，Ultra 是菜单最底部带“更快消耗使用额度”的“极高”。",
-                "In Simplified Chinese Codex, Ultra is the bottom 'Extremely high' item with the faster usage warning.")
+                "已开放 Max / Ultra 菜单；实际可选档位以当前模型和客户端支持为准。",
+                "Max / Ultra menu permissions are enabled; available efforts depend on the model and client.")
             : T(
-                "启用 Sol Ultra 后重启 Codex。",
-                "Enable Sol Ultra and restart Codex.");
+                "开放 Max / Ultra 菜单后重启 Codex，不强制改变当前推理档位。",
+                "Enable Max / Ultra menu permissions and restart without forcing a reasoning effort.");
         EnableSolUltraButton.IsEnabled = !_isBusy && !_solUltraAvailable;
     }
 
@@ -546,14 +547,14 @@ public partial class MainWindow : Window
         await RunBusyAsync(async () =>
         {
             OperationStatusText.Text = T(
-                "正在关闭 Codex，然后安全写入 Ultra 启用请求…",
-                "Closing Codex before safely writing the Ultra enablement request...");
+                "正在关闭 Codex，然后安全启用 Max / Ultra 菜单…",
+                "Closing Codex before safely enabling the Max / Ultra menu...");
             await _processService.StopAsync();
 
             string? backupFolder;
             try
             {
-                backupFolder = _configService.RequestSolUltraEnablement();
+                backupFolder = _configService.RequestSolAdvancedReasoningEnablement();
             }
             catch
             {
@@ -562,18 +563,18 @@ public partial class MainWindow : Window
             }
 
             OperationStatusText.Text = T(
-                "Ultra 启用请求已写入，正在启动 Codex…",
-                "Ultra enablement was requested. Starting Codex...");
+                "Max / Ultra 菜单配置已写入，正在启动 Codex…",
+                "Max / Ultra menu settings were written. Starting Codex...");
             await _processService.StartAsync();
             _solUltraAvailable = await WaitForSolUltraAvailabilityAsync();
             OperationStatusText.Text = _solUltraAvailable
                 ? F(
-                    "Sol Ultra 已可用。简体中文菜单中是最底部带“更快消耗使用额度”的“极高”。备份：{0}",
-                    "Sol Ultra is available. In Simplified Chinese it is the bottom item with the faster usage warning. Backup: {0}",
+                    "Max / Ultra 菜单已启用；可用档位仍由模型和客户端决定。备份：{0}",
+                    "Max / Ultra menu enabled; available efforts still depend on the model and client. Backup: {0}",
                     backupFolder ?? T("无需写入", "No write needed"))
                 : F(
-                    "已请求启用 Ultra；Codex 仍在完成启动。备份：{0}",
-                    "Ultra enablement was requested; Codex is still finishing startup. Backup: {0}",
+                    "Max / Ultra 配置已写入；Codex 仍在完成启动。备份：{0}",
+                    "Max / Ultra settings were written; Codex is still finishing startup. Backup: {0}",
                     backupFolder ?? T("无需写入", "No write needed"));
         });
 
@@ -585,7 +586,8 @@ public partial class MainWindow : Window
     {
         for (var attempt = 0; attempt < 30; attempt++)
         {
-            if (_configService.ReadSolUltraAvailability())
+            if (File.Exists(AppPaths.ConfigPath) &&
+                _configService.ParseSolAdvancedReasoningVisibility(File.ReadAllText(AppPaths.ConfigPath)))
             {
                 return true;
             }
@@ -3847,16 +3849,16 @@ public partial class MainWindow : Window
         RunSetupAgainButton.ToolTip = T(
             "重新运行首次设置向导",
             "Run the first-time setup wizard again");
-        SolUltraTitleText.Text = "Sol Ultra";
+        SolUltraTitleText.Text = "Sol Max / Ultra";
         SolUltraDescriptionText.Text = T(
-            "简体中文 Codex 会把 xhigh 和 Ultra 都显示为“极高”。Ultra 是菜单最底部带“更快消耗使用额度”的一项；Luna Agent 仍使用 Max。",
-            "Simplified Chinese Codex labels both xhigh and Ultra as 'Extremely high'. Ultra is the bottom item with the faster usage warning; the Luna task agent remains on Max.");
+            "开放最高档菜单，修复只显示 xhigh 的情况。Max 为深度推理，Ultra 为多代理模式；模型不支持的档位不会被伪造。",
+            "Enable advanced menu permissions beyond xhigh. Max is deep reasoning; Ultra uses subagents. Unsupported model efforts are not fabricated.");
         SolContextWindowTitleText.Text = T(
             "Sol / Terra 上下文预设",
             "Sol / Terra context preset");
         SolContextWindowDescriptionText.Text = T(
-            "支持 GPT-6.1 Sol、GPT-6 Sol、GPT-5.6 Sol 和 Terra。请求 1,000,000 / 900,000；实际窗口可能被 Codex 模型目录缩小。重启后请新建任务。",
-            "Supports GPT-6.1 Sol, GPT-6 Sol, GPT-5.6 Sol and Terra. Requests 1,000,000 / 900,000; the Codex catalog may reduce the actual window. Start a new task after restart.");
+            "切换到 GPT-6.1 Sol 时自动配置 1M / 900K，并修复旧目录的 272K 上限。保留自定义值和明确关闭的选择；官方最大输入为 922K，实际可用值还有客户端余量。",
+            "Switching to GPT-6.1 Sol configures 1M / 900K and repairs an old 272K catalog cap. Custom values and explicit opt-outs are preserved. Documented max input is 922K, before client headroom.");
         LunaWorkerTitleText.Text = T(
             "Luna 任务 Agent",
             "Luna task agent");
@@ -3919,7 +3921,7 @@ public partial class MainWindow : Window
 
     private static Version CurrentApplicationVersion() =>
         GitHubReleaseUpdateService.NormalizeVersion(
-            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 4, 7));
+            typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 4, 8));
 
     private Brush ResourceBrush(string key) =>
         (Brush)FindResource(key);

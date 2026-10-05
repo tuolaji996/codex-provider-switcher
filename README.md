@@ -76,7 +76,7 @@ including multiple keys for the same SuiXiang Base URL.
 
 ## Interface
 
-Version 1.4.7 uses a compact native Windows workspace:
+Version 1.4.8 uses a compact native Windows workspace:
 
 - **Home:** current route, shared-history health, and quick switching.
 - **Providers:** official OpenAI and third-party endpoint, model, and key
@@ -179,19 +179,18 @@ switcher does not automatically label them unsupported or substitute another
 model. If a different `luna-worker.toml` already exists, the switcher reports a
 conflict and leaves it untouched. Other agent definitions are never changed.
 
-## Sol Ultra readiness
+## Sol Max / Ultra menu
 
-Settings reports Ultra as ready when `ultra` is present in
-`[desktop].enabled-reasoning-efforts`. If it is missing, the one-click action
-closes Codex, writes the native one-shot
-`show-ultra-in-model-picker-slider = true` request with a backup, and relaunches
-Codex. Codex normally consumes that request and resets it to `false`; this does
-not mean Ultra was disabled.
+Switching to GPT-6.1 Sol enables `max` and `ultra` in the desktop menu
+permissions and requests Ultra slider visibility. Settings also provides a
+one-click repair with a backup and restart. Existing permitted efforts are
+preserved, including multiline arrays; the selected API reasoning effort is
+not changed. The UI reports menu configuration, not guaranteed model access.
 
-Sol supports Ultra in Codex; the optional Luna task agent remains on Max. The
-switcher does not write `model_reasoning_effort = "ultra"`, change the selected
-model, or modify chat history. In Simplified Chinese Codex, the bottom `极高`
-option with the `更快消耗使用额度` warning is Ultra.
+Max and Ultra are separate desktop controls. GPT-6.1 Sol's API supports `max`;
+desktop Ultra is an orchestration mode and remains dependent on the client and
+account. The switcher never inserts a fabricated `ultra` reasoning level into
+the native model metadata. The optional Luna task agent remains unchanged.
 
 ## GPT-6.1 Sol and model discovery
 
@@ -204,8 +203,7 @@ Switching a selected saved Sol account between `gpt-5.6-sol`, `gpt-6-sol`, and
 to a different endpoint or guessed from another account.
 
 Select `gpt-6.1-sol` and apply the provider change, then start a new Codex task.
-This configures the requested model, not the underlying Codex installation's
-model catalog. Keep Codex updated if its model picker does not list GPT-6.1 Sol.
+Keep Codex updated if its model picker does not list GPT-6.1 Sol.
 An advertised model ID alone does not prove Responses API compatibility; use
 the live connection test to verify the selected route.
 
@@ -218,6 +216,19 @@ Settings can request the one-million-token Codex configuration for
 model_context_window = 1000000
 model_auto_compact_token_limit = 900000
 ```
+
+GPT-6.1 Sol switches apply this preset automatically when no custom values or
+explicit opt-out exist. Restoring defaults records an opt-out so later provider
+switches do not re-enable it. Other supported models retain the manual action.
+
+When GPT-6.1 Sol requests long context, the switcher writes a separate managed
+`codex-provider-switcher-sol-model-catalog.json` using the exact installed 6.1
+entry. It corrects an outdated 272K cap to the documented 922,000-token maximum
+input (the total model window is 1,050,000 with up to 128,000 output tokens).
+Native instructions, tools, reasoning levels, headroom percentage, and other
+models are preserved. `models_cache.json` is never edited. A user-owned catalog
+is never replaced; missing exact 6.1 metadata safely blocks catalog generation.
+Failed writes roll back both configuration and the managed catalog.
 
 These are requested configuration values, not a guarantee of the actual
 runtime context window. Codex may clamp them using its model catalog and
@@ -234,6 +245,7 @@ reported as custom and are not silently overwritten or deleted. A third-party
 route using one of these model IDs still depends on that provider
 actually supporting the requested window; this setting changes the Codex client
 budget, not the upstream model.
+Long inputs can cost more; check your provider's current pricing before use.
 
 OpenAI references:
 
@@ -244,6 +256,7 @@ OpenAI references:
 - [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
 - [Codex changelog: GPT-6.1 Sol support](https://learn.chatgpt.com/docs/changelog)
 - [GPT-5.6 Sol model](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
+- [GPT-6.1 Sol specifications](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
 - [OpenAI model context limits on Amazon Bedrock](https://developers.openai.com/api/docs/guides/amazon-bedrock#responses-api-feature-availability)
 
 ## Boundaries
@@ -284,7 +297,7 @@ already included on the target machine. A .NET 8 SDK is needed only to build.
 To create the versioned ZIP and SHA-256 file used by GitHub Releases:
 
 ```powershell
-.\release.ps1 -Version 1.4.7 -DotNet "C:\path\to\dotnet.exe"
+.\release.ps1 -Version 1.4.8 -DotNet "C:\path\to\dotnet.exe"
 ```
 
 The installed files are placed in:
