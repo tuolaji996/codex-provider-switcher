@@ -75,7 +75,9 @@ public sealed class SettingsStore
             wasMigrated = true;
             changed = true;
         }
-        else if (EnsureCurrentProfile(settings, useLegacyCredentialTarget: false))
+        else if ((isNewInstall || settings.ProviderProfiles.Count > 0 ||
+                  currentStatus.Mode == ProviderMode.ThirdParty) &&
+                 EnsureCurrentProfile(settings, useLegacyCredentialTarget: false))
         {
             changed = true;
         }
@@ -227,12 +229,26 @@ public sealed class SettingsStore
         }
 
         EnsureCurrentProfile(settings, useLegacyCredentialTarget: false);
+        if (settings.ActiveProviderProfile?.HasPendingChanges == true)
+        {
+            // Check the explicit account selection before resolving a shared
+            // live slot. An older duplicate may reference that same slot but
+            // must not steal the selection or be overwritten by live config.
+            return changed;
+        }
         var profile = FindProfileForCurrentStatus(settings, currentStatus) ??
                       settings.EnsureActiveProviderProfile();
         if (!string.Equals(settings.ActiveProviderProfileId, profile.Id, StringComparison.Ordinal))
         {
             settings.ActiveProviderProfileId = profile.Id;
             changed = true;
+        }
+
+        if (profile.HasPendingChanges)
+        {
+            // This saved edit is a draft until an explicit provider-switch transaction.
+            // The old live credential/model must not silently undo an edit on app startup.
+            return changed;
         }
 
         var kimiRoute = IsKimiStatus(currentStatus) ||

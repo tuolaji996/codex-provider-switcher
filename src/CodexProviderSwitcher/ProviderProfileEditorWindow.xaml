@@ -1,0 +1,110 @@
+<Window x:Class="CodexProviderSwitcher.ProviderProfileEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="编辑账号"
+        Width="560"
+        Height="640"
+        MinWidth="480"
+        MinHeight="480"
+        MaxWidth="720"
+        MaxHeight="800"
+        ResizeMode="CanResizeWithGrip"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        KeyboardNavigation.TabNavigation="Cycle"
+        FocusManager.FocusedElement="{Binding ElementName=AccountNameTextBox}">
+    <Grid Background="{DynamicResource WindowBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0"
+                Background="{DynamicResource NavigationBrush}"
+                BorderBrush="{DynamicResource BorderBrush}"
+                BorderThickness="0,0,0,1"
+                Padding="24,18">
+            <StackPanel>
+                <TextBlock x:Name="HeaderTitleText"
+                           Text="编辑账号"
+                           FontSize="20"
+                           FontWeight="SemiBold" />
+                <TextBlock x:Name="SavedAccountHintText"
+                           Style="{StaticResource PageLeadStyle}"
+                           Margin="0,6,0,0" />
+            </StackPanel>
+        </Border>
+
+        <ScrollViewer Grid.Row="1"
+                      Margin="24,18,24,16"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock x:Name="AccountNameLabelText"
+                           Style="{StaticResource FieldLabelStyle}" />
+                <TextBox x:Name="AccountNameTextBox"
+                         MaxLength="80"
+                         Margin="0,6,0,16"
+                         TabIndex="0"
+                         AutomationProperties.LabeledBy="{Binding ElementName=AccountNameLabelText}" />
+
+                <TextBlock x:Name="BaseUrlLabelText"
+                           Text="Base URL"
+                           Style="{StaticResource FieldLabelStyle}" />
+                <TextBox x:Name="BaseUrlTextBox"
+                         Margin="0,6,0,16"
+                         TabIndex="1"
+                         AutomationProperties.LabeledBy="{Binding ElementName=BaseUrlLabelText}" />
+
+                <TextBlock x:Name="ModelLabelText"
+                           Style="{StaticResource FieldLabelStyle}" />
+                <TextBox x:Name="ModelTextBox"
+                         Margin="0,6,0,16"
+                         TabIndex="2"
+                         AutomationProperties.LabeledBy="{Binding ElementName=ModelLabelText}" />
+
+                <TextBlock x:Name="NewApiKeyLabelText"
+                           Style="{StaticResource FieldLabelStyle}" />
+                <PasswordBox x:Name="NewApiKeyPasswordBox"
+                             Margin="0,6,0,10"
+                             TabIndex="3"
+                             AutomationProperties.LabeledBy="{Binding ElementName=NewApiKeyLabelText}" />
+                <TextBlock x:Name="ApiKeyHintText"
+                           Style="{StaticResource PageLeadStyle}" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="2"
+                Background="{DynamicResource NavigationBrush}"
+                BorderBrush="{DynamicResource BorderBrush}"
+                BorderThickness="0,1,0,0"
+                Padding="24,14">
+            <StackPanel>
+                <TextBlock x:Name="ValidationErrorText"
+                           Foreground="{DynamicResource DangerBrush}"
+                           FontSize="13"
+                           TextWrapping="Wrap"
+                           Visibility="Collapsed"
+                           AutomationProperties.LiveSetting="Assertive"
+                           Margin="0,0,0,12" />
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Right">
+                    <Button x:Name="CancelButton"
+                            Style="{StaticResource SecondaryButton}"
+                            MinWidth="90"
+                            Margin="0,0,8,0"
+                            TabIndex="4"
+                            IsCancel="True"
+                            Click="CancelButton_Click" />
+                    <Button x:Name="SaveButton"
+                            Style="{StaticResource PrimaryButton}"
+                            MinWidth="90"
+                            TabIndex="5"
+                            IsDefault="True"
+                            Click="SaveButton_Click" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

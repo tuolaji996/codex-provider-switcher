@@ -169,6 +169,9 @@ public sealed class ProviderProfile
 
     public string Model { get; set; } = AppPaths.DefaultThirdPartyModel;
 
+    // Saved edits must not be overwritten by the still-running Codex route.
+    public bool HasPendingChanges { get; set; }
+
     // Only the Credential Manager target is persisted. The secret never is.
     public string CredentialTarget { get; set; } =
         AppPaths.LegacySuiXiangCredentialTarget;
@@ -227,7 +230,7 @@ public static class ProviderProfileRouteMatcher
                 return string.Equals(
                            candidateBaseUrl,
                            expectedBaseUrl,
-                           StringComparison.OrdinalIgnoreCase) &&
+                           StringComparison.Ordinal) &&
                        string.Equals(
                            (profile.Model ?? string.Empty).Trim(),
                            expectedModel,

@@ -14,6 +14,8 @@ void Check(bool condition, string message)
     }
 }
 
+ProviderProfileManagementTests.Run(Check);
+
 Check(
     Localizer.NormalizeCode(null) == Localizer.ChineseCode,
     "A missing language did not default to Chinese.");

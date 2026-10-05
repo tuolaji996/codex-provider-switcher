@@ -198,4 +198,12 @@ Invoke-DotNet @(
     "Release"
 )
 
+Invoke-DotNet @(
+    "run",
+    "--project",
+    (Join-Path $root "tests\CodexProviderSwitcher.UiSmoke\CodexProviderSwitcher.UiSmoke.csproj"),
+    "-c",
+    "Release"
+)
+
 Write-Host "Publish output: $publish"

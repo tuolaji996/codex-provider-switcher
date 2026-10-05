@@ -8,6 +8,14 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Saved accounts can be edited and renamed in place, or explicitly deleted
+  after confirmation (#17). Editing does not switch the running Codex route.
+- Account/key persistence failures restore the previous account collection and
+  credentials instead of leaving duplicate or partially saved accounts.
+  Compatibility/tool/image tests no longer create accounts or save draft keys.
+- Pending active-account edits survive reopening the switcher. Current-route
+  deletion is blocked; shared credentials are preserved and a final inactive
+  account can be deleted without being recreated on the next launch.
 - GPT-6.1 Sol provider switches automatically configure the 1M/900K preset
   when no custom context settings or explicit opt-out exist.
 - An independent managed catalog fixes stale 272K GPT-6.1 Sol input metadata

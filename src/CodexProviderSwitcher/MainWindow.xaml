@@ -502,6 +502,7 @@
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -529,6 +530,20 @@
                                         Margin="12,0,0,0"
                                         VerticalAlignment="Center"
                                         Click="NewProviderProfileButton_Click" />
+                                <WrapPanel Grid.Row="2" Grid.ColumnSpan="2" Margin="0,8,0,0">
+                                    <Button x:Name="EditProviderProfileButton"
+                                            Content="编辑账号"
+                                            Tag="&#xE70F;"
+                                            Style="{StaticResource SecondaryButton}"
+                                            MinHeight="32" Padding="12,5" Margin="0,0,8,0"
+                                            Click="EditProviderProfileButton_Click" />
+                                    <Button x:Name="DeleteProviderProfileButton"
+                                            Content="删除账号"
+                                            Tag="&#xE74D;"
+                                            Style="{StaticResource DangerButton}"
+                                            MinHeight="32" Padding="12,5"
+                                            Click="DeleteProviderProfileButton_Click" />
+                                </WrapPanel>
                                 <ComboBox x:Name="ProviderProfileComboBox"
                                           Grid.Row="1"
                                           Grid.ColumnSpan="2"

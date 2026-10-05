@@ -28,6 +28,24 @@ unsigned, so Windows SmartScreen may ask for confirmation.
 Use **Settings** to switch the complete interface between Chinese and English,
 and to select Light, Dark, or System appearance. Both choices are remembered.
 
+## Managing saved accounts
+
+In **Providers**, select a saved account and choose **Edit account** to change
+its name, Base URL, model, or key without creating another account. Leaving the
+key blank preserves it on the same endpoint; changing Base URL requires a new
+key. Saving an edit does not change the running Codex configuration. Apply it
+with **Switch to third-party** when ready. Pending edits survive reopening the
+switcher. These controls and the editor are available in Chinese and English.
+
+**Delete account** asks for confirmation and removes only the selected saved
+account and its unshared current key. Other accounts and chat history are not
+touched. Switch to Official Codex or another account before deleting the one
+currently in use. Accounts with different keys are never merged automatically,
+even if they use the same provider/model. Account/key failures are rolled back;
+compatibility tests use temporary drafts and cannot create duplicate accounts.
+Replacement keys use fresh credential slots so the running config and existing
+config backups retain access to their original keys.
+
 ## Guided setup
 
 On a new install, the application opens a short bilingual setup flow. It first

@@ -33,6 +33,7 @@ public partial class MainWindow : Window
     private readonly ProviderSwitchWorkflowService _switchWorkflow;
     private readonly BackupCatalogService _backupCatalogService = new();
     private readonly SettingsStore _settingsStore = new();
+    private readonly ProviderProfile _emptyProviderProfile = CreateEmptyProviderProfile();
     private readonly SessionHealthService _sessionHealthService = new();
     private readonly ConnectionTestService _connectionTestService = new();
     private readonly ModelDiscoveryService _modelDiscoveryService = new();
@@ -88,7 +89,16 @@ public partial class MainWindow : Window
         Path.Combine(AppContext.BaseDirectory, AppPaths.KimiWslLauncherFileName);
 
     private ProviderProfile ActiveProviderProfile =>
-        _settings.EnsureActiveProviderProfile();
+        _settings.ActiveProviderProfile ?? _emptyProviderProfile;
+
+    private ProviderProfileManagementService ProfileManagement => new(
+        _settingsStore.Save, CredentialVault.Read, CredentialVault.Write, CredentialVault.Delete);
+
+    private static ProviderProfile CreateEmptyProviderProfile()
+    {
+        var id = Guid.NewGuid().ToString("N");
+        return new ProviderProfile { Id = id, CredentialTarget = CredentialTargetFactory.CreateForProfileId(id) };
+    }
 
     private string ActiveCredentialTarget => ActiveProviderProfile.CredentialTarget;
 
@@ -130,6 +140,7 @@ public partial class MainWindow : Window
             _settingsLoadResult = _settingsStore.LoadWithStatus(status);
             _settings = _settingsLoadResult.Settings;
             _selectedProviderProfileId = _settings.ActiveProviderProfileId;
+            _isNewProviderProfileDraft = _settings.ProviderProfiles.Count == 0;
             Localizer.Use(_settings.UiLanguage);
             ThemeManager.Apply(_settings.UiTheme);
             ApplyLanguage();
@@ -1116,6 +1127,7 @@ public partial class MainWindow : Window
                     TokenBrokerPath,
                     target));
             switched = true;
+            profile.HasPendingChanges = false;
             RefreshLunaWorkerAgentStatus(switchResult.VerifiedStatus);
 
             _settings.LastSuccessfulCompatibilityTestUtc = DateTimeOffset.UtcNow;
@@ -1222,6 +1234,7 @@ public partial class MainWindow : Window
                 apiKey,
                 target);
             switched = true;
+            profile.HasPendingChanges = false;
             RefreshLunaWorkerAgentStatus(switchResult.VerifiedStatus);
 
             _settings.LastSuccessfulCompatibilityTestUtc = DateTimeOffset.UtcNow;
@@ -1376,6 +1389,7 @@ public partial class MainWindow : Window
             DisplayName = profile.DisplayName,
             BaseUrl = profile.BaseUrl,
             Model = profile.Model,
+            HasPendingChanges = profile.HasPendingChanges,
             CredentialTarget = profile.CredentialTarget
         };
 
@@ -1397,6 +1411,7 @@ public partial class MainWindow : Window
             profile.DisplayName = before.DisplayName;
             profile.BaseUrl = before.BaseUrl;
             profile.Model = before.Model;
+            profile.HasPendingChanges = before.HasPendingChanges;
             profile.CredentialTarget = before.CredentialTarget;
         }
 
@@ -1587,7 +1602,19 @@ public partial class MainWindow : Window
             string.Equals(
                 candidate.CredentialTarget,
                 status.CredentialTarget,
-                StringComparison.Ordinal)) ?? ActiveProviderProfile;
+                StringComparison.Ordinal));
+        if (profile is null && status.Mode == ProviderMode.ThirdParty)
+        {
+            // A staged key/endpoint edit has no matching live slot. Describe
+            // the real config rather than naming the unapplied saved provider.
+            if (SettingsStore.IsKimiLoopbackBaseUrl(status.BaseUrl))
+                return T("随想 K3（实验）", "SuiXiang K3 (experimental)");
+            if (IsSuiXiangBaseUrl(status.BaseUrl ?? string.Empty))
+                return T("随想", "SuiXiang");
+            return Uri.TryCreate(status.BaseUrl, UriKind.Absolute, out var liveUri)
+                ? liveUri.Host : T("第三方服务", "Third-party service");
+        }
+        profile ??= ActiveProviderProfile;
         if (profile.Kind == ProviderKinds.SuiXiang)
         {
             return T("随想", "SuiXiang");
@@ -1752,25 +1779,28 @@ public partial class MainWindow : Window
     {
         await RunBusyAsync(async () =>
         {
-            var profile = SaveNonSecretSettings(persist: false);
-            var key = ApiKeyPasswordBox.Password.Trim();
-            if (key.Length < 16)
+            var previousSelection = _selectedProviderProfileId;
+            var previousDraft = _isNewProviderProfileDraft;
+            try
             {
-                throw new InvalidOperationException(T(
-                    "请输入新生成的完整 API Key。",
-                    "Enter the complete newly generated API key."));
+                ProfileManagement.SaveKey(_settings,
+                    () => SaveNonSecretSettings(persist: false),
+                    ApiKeyPasswordBox.Password, _configService.ReadStatus());
             }
-
-            CredentialVault.Write(
-                CredentialTargetFactory.RequireValid(profile.CredentialTarget),
-                key);
-            _settingsStore.Save(_settings);
+            catch
+            {
+                _selectedProviderProfileId = previousSelection;
+                _isNewProviderProfileDraft = previousDraft;
+                RefreshProviderProfilePicker();
+                UpdateKeyStatusText();
+                throw;
+            }
             ApiKeyPasswordBox.Clear();
             RefreshProviderProfilePicker();
             UpdateKeyStatusText();
             OperationStatusText.Text = T(
-                "新密钥已保存到 Windows 凭据管理器。",
-                "The new key was saved to Windows Credential Manager.");
+                "账号和新密钥已保存。点击切换后生效；当前 Codex 线路未改动。",
+                "The account and new key were saved. Apply by switching; the current Codex route is unchanged.");
             await RefreshStatusAsync();
         });
     }
@@ -1815,8 +1845,9 @@ public partial class MainWindow : Window
     {
         await RunBusyAsync(async () =>
         {
-            var profile = SaveNonSecretSettings(persist: false);
-            var key = ResolveAndOptionallySaveKey();
+            var profile = PrepareCompatibilityTestDraft();
+            var key = ResolveKeyForModelDiscovery(profile.BaseUrl);
+            var testedFingerprint = CompatibilityFingerprint(profile);
             ConnectionTestResult result;
             try
             {
@@ -1826,7 +1857,7 @@ public partial class MainWindow : Window
             }
             catch
             {
-                ClearCurrentCompatibilityTestResult();
+                ClearCurrentCompatibilityTestResult(testedFingerprint);
                 _settingsStore.Save(_settings);
                 throw;
             }
@@ -1835,12 +1866,11 @@ public partial class MainWindow : Window
             if (result.Success)
             {
                 _settings.LastSuccessfulCompatibilityTestUtc = DateTimeOffset.UtcNow;
-                _settings.LastTestedEndpointFingerprint =
-                    CompatibilityFingerprint(profile);
+                _settings.LastTestedEndpointFingerprint = testedFingerprint;
             }
             else
             {
-                ClearCurrentCompatibilityTestResult();
+                ClearCurrentCompatibilityTestResult(testedFingerprint);
             }
             _settingsStore.Save(_settings);
 
@@ -1900,8 +1930,9 @@ public partial class MainWindow : Window
     {
         await RunBusyAsync(async () =>
         {
-            var profile = SaveNonSecretSettings(persist: false);
-            var key = ResolveAndOptionallySaveKey();
+            var profile = PrepareCompatibilityTestDraft();
+            var key = ResolveKeyForModelDiscovery(profile.BaseUrl);
+            var testedFingerprint = ConnectionTestService.EndpointFingerprint(profile.BaseUrl, profile.Model);
             ToolCapabilityStatusText.Text =
                 T(
                     "第三方插件工具调用：正在测试 function_call 与工具结果回传…",
@@ -1918,7 +1949,7 @@ public partial class MainWindow : Window
             }
             catch
             {
-                ClearCurrentToolTestResult();
+                ClearCurrentToolTestResult(testedFingerprint);
                 _settingsStore.Save(_settings);
                 UpdatePersistedProviderCapabilityStatuses();
                 throw;
@@ -1932,14 +1963,11 @@ public partial class MainWindow : Window
             if (result.Success)
             {
                 _settings.LastSuccessfulToolTestUtc = DateTimeOffset.UtcNow;
-                _settings.LastToolTestedEndpointFingerprint =
-                    ConnectionTestService.EndpointFingerprint(
-                        profile.BaseUrl,
-                        profile.Model);
+                _settings.LastToolTestedEndpointFingerprint = testedFingerprint;
             }
             else
             {
-                ClearCurrentToolTestResult();
+                ClearCurrentToolTestResult(testedFingerprint);
             }
             _settingsStore.Save(_settings);
             UpdatePersistedProviderCapabilityStatuses();
@@ -1973,8 +2001,10 @@ public partial class MainWindow : Window
 
         await RunBusyAsync(async () =>
         {
-            var profile = SaveNonSecretSettings(persist: false);
-            var key = ResolveAndOptionallySaveKey();
+            var profile = PrepareCompatibilityTestDraft();
+            var key = ResolveKeyForModelDiscovery(profile.BaseUrl);
+            var testedFingerprint = ConnectionTestService.EndpointFingerprint(
+                profile.BaseUrl, AppPaths.DefaultThirdPartyImageModel);
             ImageCapabilityStatusText.Text =
                 T(
                     "第三方图片生成：正在实测 Codex 当前使用的 Images API…",
@@ -1991,7 +2021,7 @@ public partial class MainWindow : Window
             }
             catch
             {
-                ClearCurrentImageTestResult();
+                ClearCurrentImageTestResult(testedFingerprint);
                 _settingsStore.Save(_settings);
                 UpdatePersistedProviderCapabilityStatuses();
                 throw;
@@ -2006,15 +2036,12 @@ public partial class MainWindow : Window
             if (result.Success && !string.IsNullOrWhiteSpace(result.ArtifactPath))
             {
                 _settings.LastSuccessfulImageTestUtc = DateTimeOffset.UtcNow;
-                _settings.LastImageTestedEndpointFingerprint =
-                    ConnectionTestService.EndpointFingerprint(
-                        profile.BaseUrl,
-                        AppPaths.DefaultThirdPartyImageModel);
+                _settings.LastImageTestedEndpointFingerprint = testedFingerprint;
                 _settings.LastGeneratedImagePath = result.ArtifactPath;
             }
             else
             {
-                ClearCurrentImageTestResult();
+                ClearCurrentImageTestResult(testedFingerprint);
             }
             _settingsStore.Save(_settings);
             UpdatePersistedProviderCapabilityStatuses();
@@ -2297,6 +2324,7 @@ public partial class MainWindow : Window
                 }
                 _settings.RestartAfterSwitch = true;
                 _settings.ActiveProviderProfileId = attemptedProfile.Id;
+                attemptedProfile.HasPendingChanges = false;
                 _selectedProviderProfileId = attemptedProfile.Id;
                 _isNewProviderProfileDraft = false;
                 _settings.LastTestedEndpointFingerprint =
@@ -2438,6 +2466,7 @@ public partial class MainWindow : Window
             // written and verified.  A failed request above leaves the
             // previous active profile untouched.
             _settings.ActiveProviderProfileId = attemptedProfile.Id;
+            attemptedProfile.HasPendingChanges = false;
             _selectedProviderProfileId = attemptedProfile.Id;
             _isNewProviderProfileDraft = false;
             _settingsStore.Save(_settings);
@@ -2838,7 +2867,7 @@ public partial class MainWindow : Window
             return string.Equals(
                 ConfigService.NormalizeBaseUrl(profile.BaseUrl),
                 normalizedBaseUrl,
-                StringComparison.OrdinalIgnoreCase);
+                StringComparison.Ordinal);
         }
         catch (ArgumentException)
         {
@@ -2886,6 +2915,14 @@ public partial class MainWindow : Window
         {
             _isRefreshingProviderProfiles = false;
         }
+        UpdateProfileManagementButtons();
+    }
+
+    private void UpdateProfileManagementButtons()
+    {
+        var hasSelection = !_isBusy && DraftProviderProfile is not null;
+        EditProviderProfileButton.IsEnabled = hasSelection;
+        DeleteProviderProfileButton.IsEnabled = hasSelection;
     }
 
     private StackPanel CreateProviderProfilePickerContent(ProviderProfile profile)
@@ -2906,12 +2943,8 @@ public partial class MainWindow : Window
                 string.Equals(candidate.Id, profile.Id, StringComparison.Ordinal)) + 1;
             routeName = $"{routeName} · {T("账号", "Account")} {ordinal}";
         }
-        var isActive = _lastConfigStatus is { Mode: ProviderMode.ThirdParty } status &&
-                       CredentialTargetFactory.IsValid(status.CredentialTarget) &&
-                       string.Equals(
-                           profile.CredentialTarget,
-                           status.CredentialTarget,
-                           StringComparison.Ordinal);
+        var isActive = _lastConfigStatus is { } status &&
+                       ProviderProfileManagementService.IsLiveProfile(_settings, profile, status);
         var model = string.IsNullOrWhiteSpace(profile.Model)
             ? T("未设置模型", "No model")
             : profile.Model.Trim();
@@ -2934,7 +2967,8 @@ public partial class MainWindow : Window
         });
         panel.Children.Add(new TextBlock
         {
-            Text = $"{model} · {keyState} · {endpoint}",
+            Text = $"{model} · {keyState} · {endpoint}" +
+                   (profile.HasPendingChanges ? $" · {T("待应用", "Pending changes")}" : ""),
             FontSize = 11,
             Foreground = ResourceBrush("SubtleTextBrush"),
             TextTrimming = TextTrimming.CharacterEllipsis
@@ -2944,6 +2978,10 @@ public partial class MainWindow : Window
 
     private string ResolveProfileRouteName(ProviderProfile profile)
     {
+        if (!string.IsNullOrWhiteSpace(profile.DisplayName))
+        {
+            return profile.DisplayName;
+        }
         if (profile.Kind == ProviderKinds.Kimi)
         {
             return T("随想 K3（实验）", "SuiXiang K3 (experimental)");
@@ -3000,6 +3038,7 @@ public partial class MainWindow : Window
         {
             _selectedProviderProfileId = profile.Id;
             _isNewProviderProfileDraft = false;
+            UpdateProfileManagementButtons();
             BaseUrlTextBox.Text = profile.BaseUrl;
             ModelComboBox.Text = profile.Model;
             ApiKeyPasswordBox.Clear();
@@ -3053,6 +3092,62 @@ public partial class MainWindow : Window
                 "请输入新账号的 API Key；保存密钥或成功切换后，才会建立独立账号。",
                 "Enter the new account API key. A separate account is created only after you save the key or switch successfully.");
             return Task.CompletedTask;
+        });
+    }
+
+    private async void EditProviderProfileButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy || DraftProviderProfile is not { } profile) return;
+        var editor = new ProviderProfileEditorWindow(profile) { Owner = this };
+        if (editor.ShowDialog() != true || editor.Edit is not { } edit) return;
+        await RunBusyAsync(async () =>
+        {
+            ProfileManagement.SaveEdit(_settings, profile.Id, edit, _configService.ReadStatus());
+            _selectedProviderProfileId = profile.Id;
+            _isNewProviderProfileDraft = false;
+            BaseUrlTextBox.Text = profile.BaseUrl;
+            ModelComboBox.Text = profile.Model;
+            ApiKeyPasswordBox.Clear();
+            _modelListBaseUrl = null;
+            ModelComboBox.Items.Clear();
+            ModelComboBox.Text = profile.Model;
+            ModelDiscoveryStatusText.Text = string.Empty;
+            await RefreshStatusAsync();
+            UpdatePersistedProviderCapabilityStatuses();
+            OperationStatusText.Text = T(
+                "账号修改已保存，未切换 Codex。需要使用修改后的线路时，请点击“切换到第三方”。",
+                "Account changes saved without switching Codex. Use Switch to third-party to apply the edited route.");
+        });
+    }
+
+    private async void DeleteProviderProfileButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy || DraftProviderProfile is not { } profile) return;
+        var confirmation = F(
+            "删除账号“{0}”（{1}）？只删除这个已保存账号及其独享密钥；其他账号和聊天历史不会改动。删除的独享密钥需要重新填写。",
+            "Delete account '{0}' ({1})? Only this saved account and its unshared key are removed. Other accounts and chat history stay unchanged. A deleted unshared key must be entered again.",
+            ResolveProfileRouteName(profile), profile.Model);
+        if (MessageBox.Show(this, confirmation, T("删除账号", "Delete account"),
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
+            return;
+        await RunBusyAsync(async () =>
+        {
+            ProfileManagement.Delete(_settings, profile.Id, _configService.ReadStatus());
+            var next = _settings.ProviderProfiles.FirstOrDefault(candidate =>
+                !ProviderAvailabilityPolicy.IsRetiredKimiProfile(candidate));
+            _selectedProviderProfileId = next?.Id;
+            _isNewProviderProfileDraft = next is null;
+            BaseUrlTextBox.Text = next?.BaseUrl ?? AppPaths.DefaultBaseUrl;
+            ModelComboBox.Items.Clear();
+            ModelComboBox.Text = next?.Model ?? AppPaths.DefaultThirdPartyModel;
+            ApiKeyPasswordBox.Clear();
+            _modelListBaseUrl = null;
+            ModelDiscoveryStatusText.Text = string.Empty;
+            await RefreshStatusAsync();
+            UpdatePersistedProviderCapabilityStatuses();
+            OperationStatusText.Text = T(
+                "账号已删除，当前线路与聊天历史未改动。",
+                "Account deleted. The current route and chat history are unchanged.");
         });
     }
 
@@ -3297,6 +3392,9 @@ public partial class MainWindow : Window
                     "尚未保存第三方密钥。请先撤销已暴露的旧密钥，再粘贴新密钥。",
                     "No third-party key is saved. Revoke the exposed old key, then paste a newly generated key."));
     }
+
+    private ProviderProfile PrepareCompatibilityTestDraft() =>
+        ProviderProfileManagementService.CreateTestDraft(BaseUrlTextBox.Text, ModelComboBox.Text);
 
     private Task<ConnectionTestResult> TestConnectionAsync(
         string baseUrl,
@@ -3545,30 +3643,30 @@ public partial class MainWindow : Window
             ModelComboBox.Text);
     }
 
-    private void ClearCurrentToolTestResult()
+    private void ClearCurrentToolTestResult(string? testedFingerprint = null)
     {
         if (_settings.LastToolTestedEndpointFingerprint ==
-            CurrentToolEndpointFingerprint())
+            (testedFingerprint ?? CurrentToolEndpointFingerprint()))
         {
             _settings.LastSuccessfulToolTestUtc = null;
             _settings.LastToolTestedEndpointFingerprint = null;
         }
     }
 
-    private void ClearCurrentCompatibilityTestResult()
+    private void ClearCurrentCompatibilityTestResult(string? testedFingerprint = null)
     {
         if (_settings.LastTestedEndpointFingerprint ==
-            CurrentCompatibilityEndpointFingerprint())
+            (testedFingerprint ?? CurrentCompatibilityEndpointFingerprint()))
         {
             _settings.LastSuccessfulCompatibilityTestUtc = null;
             _settings.LastTestedEndpointFingerprint = null;
         }
     }
 
-    private void ClearCurrentImageTestResult()
+    private void ClearCurrentImageTestResult(string? testedFingerprint = null)
     {
         if (_settings.LastImageTestedEndpointFingerprint ==
-            CurrentImageEndpointFingerprint())
+            (testedFingerprint ?? CurrentImageEndpointFingerprint()))
         {
             _settings.LastSuccessfulImageTestUtc = null;
             _settings.LastImageTestedEndpointFingerprint = null;
@@ -3656,6 +3754,7 @@ public partial class MainWindow : Window
         ModelComboBox.IsEnabled = !busy;
         ProviderProfileComboBox.IsEnabled = !busy;
         NewProviderProfileButton.IsEnabled = !busy;
+        UpdateProfileManagementButtons();
         RefreshModelsButton.IsEnabled = !busy;
         ApiKeyPasswordBox.IsEnabled = !busy;
         RestartCheckBox.IsEnabled = false;
@@ -3756,6 +3855,14 @@ public partial class MainWindow : Window
             "选择只会载入草稿；点击切换成功后才会成为当前线路。",
             "Selection only loads a draft. It becomes the active route after a successful switch.");
         NewProviderProfileButton.Content = T("添加账号", "Add account");
+        EditProviderProfileButton.Content = T("编辑账号", "Edit account");
+        EditProviderProfileButton.ToolTip = T(
+            "修改名称、地址、模型或密钥；只保存，不会立即切换 Codex。",
+            "Edit the name, URL, model, or key. Saving does not immediately switch Codex.");
+        DeleteProviderProfileButton.Content = T("删除账号", "Delete account");
+        DeleteProviderProfileButton.ToolTip = T(
+            "删除选中的已保存账号。当前 Codex 正在使用的账号不能删除。",
+            "Delete the selected saved account. The account currently used by Codex cannot be deleted.");
         NewProviderProfileButton.ToolTip = T(
             "添加一个独立的 API Key；输入并保存密钥或成功切换后才会建立账号。",
             "Add an independent API key. The account is created only after the key is saved or a switch succeeds.");
